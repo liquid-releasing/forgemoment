@@ -20,3 +20,17 @@ export {
 
 export { HoldSeekButton } from './HoldSeekButton.jsx';
 export { MediaViewer } from './MediaViewer.jsx';
+
+// Charts — visualisation primitives (v0.0.2 subset; heavy components
+// like ScriptChart / ScopePlayer / BpmBandChart deferred until a
+// consumer needs them).
+export {
+  BPM_TIERS,
+  BehaviorTagBar,
+  ChapterStrip,
+  ChartTitleStrip,
+  PhraseRibbon,
+  bpmTier,
+  tagColor,
+  tagLabel,
+} from './Charts.jsx';

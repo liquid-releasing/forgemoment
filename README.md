@@ -8,18 +8,33 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 > video + waveform + frame-step) is built once in forgemoment as a
 > library."* — original 2026-04-26 framing, now a React library.
 
-## What's in the box (v0.0.1)
+## What's in the box
 
 | Export | Role |
 |---|---|
 | **`MediaViewer`** | The master clock viewer. 3-mode thumbnail (Video / Audio / Funscript), transport, baton sync, `onTimeChange` signal that sibling subviews subscribe to. |
+| **`ChapterStrip`** | Click-to-scope chapter strip. Renders the chapter list as colored bands; clicking one returns its `chapter` record so the consumer can set the MediaViewer's `chapter` prop to scope into it. Pairs with the +Mark integration point to close the chapter-creation loop. (NEW — not in iter 08.) |
+| `PhraseRibbon` | Horizontal phrase strip with click-to-select. `tags` prop replaces iter 08's `window.FF_TAGS` global. |
+| `BehaviorTagBar` | Stacked % bar showing time distribution across behavior tags. |
+| `ChartTitleStrip` | Small title-strip header (title · meta · meta · time). |
+| `BPM_TIERS`, `bpmTier` | BPM classification helpers (high / mid / low). |
+| `tagColor`, `tagLabel` | Phrase-tag color/label resolvers; take a `tags` catalog prop. |
 | `HoldSeekButton` | Press-and-hold rewind / fast-forward with 2→4→8→16× ramp every 600ms. |
 | `Button`, `Pill`, `Card`, `Field`, `TextInput`, `Slider`, `Segmented`, `SectionHeading`, `Icon` | Base UI primitives. |
 | `fmtTime`, `fmtTimeShort` | Time-formatting helpers. |
 
-Components in [REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md) that aren't here yet:
-`Charts.jsx` (timelines), `TransformPanel.jsx`, `AppShell.jsx`. Land in
-subsequent versions as consumers need them.
+### Deferred — port when a consumer needs them
+
+Other components from iter 08's [`Charts.jsx`](https://github.com/liquid-releasing/forge-ui-design/blob/main/iterations/08-redesign/design_files/Charts.jsx)
+not yet ported:
+
+`ScriptChart`, `PreviewChart`, `ScopePlayer`, `MiniWave`, `Sparkline`,
+`DiffSparkline`, `BpmBandChart`, `PhraseDetailZoomChart`.
+
+Other files from [REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md)
+not yet started:
+
+`TransformPanel.jsx`, `AppShell.jsx`.
 
 ## Master clock contract
 

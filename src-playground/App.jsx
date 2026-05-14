@@ -6,23 +6,23 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Button, Card, Field, HoldSeekButton, MediaViewer, Pill, SectionHeading,
-  Segmented, Slider, TextInput, fmtTime,
+  Button, Card, ChapterStrip, Field, HoldSeekButton, MediaViewer, Pill,
+  SectionHeading, Segmented, Slider, TextInput, fmtTime,
 } from 'forgemoment';
 
 const TRACK_DURATION_MS = 300_000; // 5 minutes
-// Demo chapter starts at 0 so the baton moves the moment you hit Play.
-// (Earlier shape that started at 60_000 made the baton sit clamped at
-// the chapter's left edge for the first minute of the play loop —
-// which read as "the baton is broken" rather than "you're before the
-// chapter range".)
-const FAKE_CHAPTER = {
-  id: 'ch-1',
-  title: 'Build — music',
-  color: '#4dabf7',
-  start: 0,
-  end:   180_000,
-};
+
+// Seed chapters — gives the ChapterStrip something to render on first
+// load and demonstrates the +Mark → ChapterStrip → MediaViewer scope
+// loop without forcing the user to mark three chapters before anything
+// renders. Names/colors mirror the canonical music/ambient template
+// so the playground reads like real content.
+const INITIAL_CHAPTERS = [
+  { id: 'ch-1', name: 'Intro',  at_ms:      0, end_ms:  60_000, color: '#3ed598' },
+  { id: 'ch-2', name: 'Build',  at_ms: 60_000, end_ms: 180_000, color: '#4dabf7' },
+  { id: 'ch-3', name: 'Climax', at_ms: 180_000, end_ms: 260_000, color: '#ff7b7b' },
+  { id: 'ch-4', name: 'Outro',  at_ms: 260_000, end_ms: 300_000, color: '#ffb547' },
+];
 
 // Synthetic data the data-driven MediaViewer renderers can chew on.
 const FAKE_WAVEFORM = {
@@ -55,6 +55,23 @@ export function App() {
   // "create chapter" or "drop a beat" or "tag a note" depending on
   // what the consuming app wires onMark to.
   const [markLabel, setMarkLabel] = useState('Chapter');
+  // The full chapter list the ChapterStrip renders. Marks the user
+  // adds via +Chapter prepend to this list (with auto-cycled palette
+  // colour); the Strip is click-to-select; whichever chapter is
+  // selected becomes the MediaViewer's `chapter` prop so the Viewer
+  // scopes to that chapter's slice.
+  const [chapters, setChapters] = useState(INITIAL_CHAPTERS);
+  const [scopedChapterId, setScopedChapterId] = useState(INITIAL_CHAPTERS[1].id);
+  const scopedChapter = chapters.find((c) => c.id === scopedChapterId) || null;
+  // MediaViewer's existing `chapter` prop wants {id, title, color, start, end}
+  // — map our richer chapter shape into that.
+  const viewerChapter = scopedChapter && {
+    id: scopedChapter.id,
+    title: scopedChapter.name,
+    color: scopedChapter.color,
+    start: scopedChapter.at_ms,
+    end:   scopedChapter.end_ms,
+  };
 
   // Fake play loop: 24fps simulated playback. Demonstrates that the
   // Viewer's onTimeChange fires as the clock advances.
@@ -95,8 +112,28 @@ export function App() {
         right={<Pill tone="accent" dot>v0.0.1</Pill>}
       />
 
-      {/* MediaViewer + sibling subscriber */}
+      {/* MediaViewer + sibling subscriber + ChapterStrip below */}
       <Card padding={20}>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{
+            fontSize: 11, color: 'var(--text-muted)',
+            textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
+            display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+          }}>
+            <span>Chapter strip — click to scope the viewer</span>
+            <span className="mono" style={{ color: 'var(--text-dim)', fontSize: 10 }}>
+              {chapters.length} chapter{chapters.length === 1 ? '' : 's'}
+              {scopedChapter && ` · scoped: ${scopedChapter.name}`}
+            </span>
+          </div>
+          <ChapterStrip
+            chapters={chapters}
+            totalMs={TRACK_DURATION_MS}
+            currentMs={currentMs}
+            selectedId={scopedChapterId}
+            onSelect={(ch) => setScopedChapterId(ch.id)}
+          />
+        </div>
         <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
           <MediaViewer
             currentMs={currentMs}
@@ -108,9 +145,27 @@ export function App() {
             onTimeChange={handleTimeChange}
             onPrev={() => setCurrentMs(Math.max(0, currentMs - 30_000))}
             onNext={() => setCurrentMs(Math.min(TRACK_DURATION_MS, currentMs + 30_000))}
-            onMark={(ms) => setMarks((m) => [...m, { kind: markLabel, at_ms: ms }])}
+            onMark={(ms) => {
+              setMarks((m) => [...m, { kind: markLabel, at_ms: ms }]);
+              // When the user is marking Chapters specifically, also
+              // append to the live chapter list so the ChapterStrip
+              // below the Viewer renders it immediately. Other mark
+              // kinds (Beat / Note / Cue) just go to the marks card.
+              if (markLabel === 'Chapter') {
+                const newId = `ch-mark-${Date.now()}`;
+                setChapters((cs) => {
+                  // Insert in time order, then re-bound the neighbouring
+                  // chapters' end_ms / at_ms so the strip stays gapless.
+                  const next = [...cs, {
+                    id: newId, name: `Chapter ${cs.length + 1}`,
+                    at_ms: ms,
+                  }];
+                  return next.sort((a, b) => a.at_ms - b.at_ms);
+                });
+              }
+            }}
             markLabel={markLabel}
-            chapter={FAKE_CHAPTER}
+            chapter={viewerChapter}
             totalMs={TRACK_DURATION_MS}
             audioWaveform={FAKE_WAVEFORM}
             funscript={FAKE_FUNSCRIPT}

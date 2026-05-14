@@ -72,7 +72,7 @@
 //   width             number (px)                             default 240
 
 import { useEffect, useState } from 'react';
-import { Segmented } from './primitives.jsx';
+import { Icon, Segmented } from './primitives.jsx';
 
 const MODE_OPTIONS = [
   { value: 'video',     label: 'Video' },
@@ -236,18 +236,28 @@ export function MediaViewer({
         {!chapter && totalMs != null && <span>{fmtShort(totalMs)}</span>}
       </div>
 
-      {/* Transport — chapter nav + frame jog + play/pause */}
+      {/* Transport — chapter nav + frame jog + play/pause.
+          Icon choices on the frame-jog (◀/▶ → step-back/step-forward):
+          ◀ and ▶ next to ⏪ (back 5s) and ⏭ (next chapter) read as
+          "back" + "fast-back" / "forward" + "fast-forward". The lucide
+          step-back/step-forward glyphs (triangle + vertical bar) read
+          unambiguously as single-frame step. Validated via user
+          feedback 2026-05-14. */}
       <div style={{
         padding: '6px 8px', display: 'flex', gap: 4, justifyContent: 'center',
         borderTop: '1px solid var(--border)',
       }}>
         <TransportButton title={prevTitle} onClick={prev}>⏮</TransportButton>
-        <TransportButton title="Frame back" onClick={() => stepFrame(-1)}>◀</TransportButton>
+        <TransportButton title="Frame back" onClick={() => stepFrame(-1)}>
+          <Icon name="step-back" size={14} />
+        </TransportButton>
         <TransportButton title="Back 5s" onClick={back5}>⏪</TransportButton>
         <TransportButton primary title={isPlaying ? 'Pause' : 'Play'} onClick={onPlayPause}>
           {isPlaying ? '⏸' : '▶'}
         </TransportButton>
-        <TransportButton title="Frame forward" onClick={() => stepFrame(1)}>▶</TransportButton>
+        <TransportButton title="Frame forward" onClick={() => stepFrame(1)}>
+          <Icon name="step-forward" size={14} />
+        </TransportButton>
         <TransportButton title={nextTitle} onClick={next}>⏭</TransportButton>
       </div>
 

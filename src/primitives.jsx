@@ -23,8 +23,9 @@ import {
   Home, Image, Info, Layers, Library, List, Loader, Lock, LogIn, LogOut,
   Maximize, Menu, MoreHorizontal, MoreVertical, Move, Music, Pause, Pencil,
   Play, Plus, Radio, RefreshCcw, RotateCcw, Save, Search, Settings, Share2,
-  SkipBack, SkipForward, Sliders, Square, Star, Trash, Trash2, Upload, User,
-  Video, Volume2, VolumeX, X, Zap, ZoomIn, ZoomOut,
+  SkipBack, SkipForward, Sliders, Square, Star, StepBack, StepForward,
+  Trash, Trash2, Upload, User, Video, Volume2, VolumeX, X, Zap,
+  ZoomIn, ZoomOut,
 } from 'lucide-react';
 
 const LUCIDE_MAP = {
@@ -43,6 +44,7 @@ const LUCIDE_MAP = {
   'refresh-ccw': RefreshCcw, 'rotate-ccw': RotateCcw, save: Save,
   search: Search, settings: Settings, 'share-2': Share2, 'skip-back': SkipBack,
   'skip-forward': SkipForward, sliders: Sliders, square: Square, star: Star,
+  'step-back': StepBack, 'step-forward': StepForward,
   trash: Trash, 'trash-2': Trash2, upload: Upload, user: User, video: Video,
   'volume-2': Volume2, 'volume-x': VolumeX, x: X, zap: Zap,
   'zoom-in': ZoomIn, 'zoom-out': ZoomOut,

@@ -11,11 +11,16 @@ import {
 } from 'forgemoment';
 
 const TRACK_DURATION_MS = 300_000; // 5 minutes
+// Demo chapter starts at 0 so the baton moves the moment you hit Play.
+// (Earlier shape that started at 60_000 made the baton sit clamped at
+// the chapter's left edge for the first minute of the play loop —
+// which read as "the baton is broken" rather than "you're before the
+// chapter range".)
 const FAKE_CHAPTER = {
   id: 'ch-1',
   title: 'Build — music',
   color: '#4dabf7',
-  start: 60_000,
+  start: 0,
   end:   180_000,
 };
 
@@ -41,6 +46,10 @@ export function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [mode, setMode] = useState('video');
   const [batonObservers, setBatonObservers] = useState({ count: 0, lastMs: 0 });
+  // Chapters created from the Viewer's +Chapter button land here so the
+  // playground can prove the callback fires. Real consumers would push
+  // into a sidecar / chapter list and re-render.
+  const [createdChapters, setCreatedChapters] = useState([]);
 
   // Fake play loop: 24fps simulated playback. Demonstrates that the
   // Viewer's onTimeChange fires as the clock advances.
@@ -94,6 +103,7 @@ export function App() {
             onTimeChange={handleTimeChange}
             onPrev={() => setCurrentMs(Math.max(0, currentMs - 30_000))}
             onNext={() => setCurrentMs(Math.min(TRACK_DURATION_MS, currentMs + 30_000))}
+            onCreateChapter={() => setCreatedChapters((c) => [...c, { at_ms: currentMs }])}
             chapter={FAKE_CHAPTER}
             totalMs={TRACK_DURATION_MS}
             audioWaveform={FAKE_WAVEFORM}
@@ -103,6 +113,7 @@ export function App() {
           />
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <SiblingClockSubscriber observers={batonObservers} currentMs={currentMs} />
+            <CreatedChaptersCard chapters={createdChapters} onClear={() => setCreatedChapters([])} />
             <Field label="Scrub (parent owns time; Viewer reflects)">
               <Slider
                 min={0}
@@ -162,6 +173,48 @@ export function App() {
         </div>
       </Card>
     </div>
+  );
+}
+
+function CreatedChaptersCard({ chapters, onClear }) {
+  return (
+    <Card padding={14}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: 6,
+      }}>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 }}>
+          Chapters created via Viewer&apos;s +Chapter
+        </div>
+        {chapters.length > 0 && (
+          <button
+            onClick={onClear}
+            style={{
+              fontSize: 10, padding: '2px 6px', borderRadius: 4,
+              background: 'transparent', color: 'var(--text-dim)',
+              border: '1px solid var(--border)', cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            clear
+          </button>
+        )}
+      </div>
+      {chapters.length === 0
+        ? <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>none yet — tap ➕ Chapter on the Viewer</div>
+        : (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--text)', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {chapters.map((c, i) => (
+              <span key={i} style={{
+                padding: '2px 6px', borderRadius: 4,
+                background: 'var(--surface-2)', border: '1px solid var(--border)',
+              }}>
+                #{i + 1} {fmtTime(c.at_ms)}
+              </span>
+            ))}
+          </div>
+        )
+      }
+    </Card>
   );
 }
 

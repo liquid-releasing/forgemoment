@@ -15,6 +15,12 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 | **`MediaViewer`** | The master clock viewer. 3-mode thumbnail (Video / Audio / Funscript), transport, baton sync, `onTimeChange` signal that sibling subviews subscribe to. |
 | **`ChapterStrip`** | Click-to-scope chapter strip. Renders the chapter list as colored bands; clicking one returns its `chapter` record so the consumer can set the MediaViewer's `chapter` prop to scope into it. Pairs with the +Mark integration point to close the chapter-creation loop. (NEW — not in iter 08.) |
 | **`ScriptChart`** | Funscript curve over a viewport window. Phrase tag bands, edit-region highlight, click-to-seek, configurable BPM-tier tone. The canonical funscript display across the toolchain. |
+| **`TopBar`** | Top strip of an lqr studio app — logo / file info / badge / scope slot / left + right action slots. Every FFP-specific bit is consumer-owned. |
+| **`TabStrip`** | Horizontal tabs with pipeline-ready states (green-dot when accepted, dimmed when upstream isn't). `tabs` / `utilityTabs` / `helpItems` props replace iter 08's hardcoded FF_TABS / FF_UTILITY_TABS / HelpMenu items. |
+| **`ScopePicker`** | Generic scope picker (replaces iter 08's chapter-specific ChapterScopePicker). Accepts a `scopes` array of `{id, title, color?, start?, end?}`. |
+| **`StatusBar`** | Bottom strip — Synced indicator / scope / chain file / version stamp. All optional. |
+| **`AcceptBar`** | The canonical "Accept and chain" bar — primary / Reset / accepted-state Pill / chain-file hint. |
+| **`TabBody`**, **`TabHeader`**, **`SectionLabel`** | Layout helpers for the inside of a tab. |
 | `PhraseRibbon` | Horizontal phrase strip with click-to-select. `tags` prop replaces iter 08's `window.FF_TAGS` global. |
 | `BehaviorTagBar` | Stacked % bar showing time distribution across behavior tags. |
 | `ChartTitleStrip` | Small title-strip header (title · meta · meta · time). |
@@ -36,7 +42,7 @@ not yet ported:
 Other files from [REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md)
 not yet started:
 
-`TransformPanel.jsx`, `AppShell.jsx`.
+`TransformPanel.jsx`.
 
 ## Master clock contract
 

@@ -21,6 +21,21 @@ export {
 export { HoldSeekButton } from './HoldSeekButton.jsx';
 export { MediaViewer } from './MediaViewer.jsx';
 
+// AppShell — TopBar, TabStrip, StatusBar, AcceptBar, ScopePicker,
+// TabBody, TabHeader, SectionLabel. FFP-specific data (FF_TABS,
+// FF_UTILITY_TABS, hardcoded scope picker / logo / help items) is
+// consumer-owned via props — never hardcoded in the library.
+export {
+  AcceptBar,
+  ScopePicker,
+  SectionLabel,
+  StatusBar,
+  TabBody,
+  TabHeader,
+  TabStrip,
+  TopBar,
+} from './AppShell.jsx';
+
 // Charts — visualisation primitives (subset; ScopePlayer / BpmBandChart
 // / PreviewChart still deferred until a consumer needs them).
 export {

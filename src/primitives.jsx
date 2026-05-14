@@ -19,7 +19,7 @@ import {
   // isn't mapped means a typo doesn't crash the app.
   Activity, AlertCircle, ArrowLeft, ArrowRight, Box, Check, ChevronDown,
   ChevronLeft, ChevronRight, ChevronUp, Circle, Cog, Copy, Download,
-  Edit, Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, HelpCircle,
+  Edit, ExternalLink, Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, HelpCircle,
   Home, Image, Info, Layers, Library, List, Loader, Lock, LogIn, LogOut,
   Maximize, Menu, MoreHorizontal, MoreVertical, Move, Music, Pause, Pencil,
   Play, Plus, Radio, RefreshCcw, RotateCcw, Save, Search, Settings, Share2,
@@ -33,7 +33,8 @@ const LUCIDE_MAP = {
   'arrow-right': ArrowRight, box: Box, check: Check,
   'chevron-down': ChevronDown, 'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight, 'chevron-up': ChevronUp, circle: Circle,
-  cog: Cog, copy: Copy, download: Download, edit: Edit, eye: Eye,
+  cog: Cog, copy: Copy, download: Download, edit: Edit,
+  'external-link': ExternalLink, eye: Eye,
   'eye-off': EyeOff, file: File, 'file-text': FileText, film: Film,
   folder: Folder, 'folder-open': FolderOpen, 'help-circle': HelpCircle,
   home: Home, image: Image, info: Info, layers: Layers, library: Library,

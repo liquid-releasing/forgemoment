@@ -1,30 +1,37 @@
-// Playground for forgemoment — dogfood the components against a fake
-// playback loop so the master-clock contract is visible at a glance.
+// Playground for forgemoment — dogfood the components by composing
+// them into a small but real-looking app frame.
 //
 // Run with `npm run dev` from the forgemoment/ repo root; opens at
 // http://localhost:5174.
+//
+// The app frame: AppShell.TopBar + TabStrip + TabBody + StatusBar
+// (StatusBar lives at the very bottom of the viewport). Three tabs
+// exercise the carve-out: Viewer (MediaViewer + ChapterStrip +
+// master-clock subscriber + marks card), Curve (ScriptChart with
+// viewport toggle), Primitives (visual gallery of the small UI kit).
+//
+// The TopBar's ScopePicker drives the same scopedChapterId that the
+// ChapterStrip and MediaViewer read — proves the cross-tab state can
+// live in the parent and flow through forgemoment without re-mounting
+// the Viewer between tabs.
 
 import { useEffect, useState } from 'react';
 import {
-  Button, Card, ChapterStrip, Field, HoldSeekButton, MediaViewer, Pill,
-  ScriptChart, SectionHeading, Segmented, Slider, TextInput, fmtTime,
+  AcceptBar, Button, Card, ChapterStrip, Field, HoldSeekButton,
+  MediaViewer, Pill, ScopePicker, ScriptChart, SectionLabel, Segmented,
+  Slider, StatusBar, TabBody, TabHeader, TabStrip, TextInput, TopBar,
+  fmtTime,
 } from 'forgemoment';
 
 const TRACK_DURATION_MS = 300_000; // 5 minutes
 
-// Seed chapters — gives the ChapterStrip something to render on first
-// load and demonstrates the +Mark → ChapterStrip → MediaViewer scope
-// loop without forcing the user to mark three chapters before anything
-// renders. Names/colors mirror the canonical music/ambient template
-// so the playground reads like real content.
 const INITIAL_CHAPTERS = [
-  { id: 'ch-1', name: 'Intro',  at_ms:      0, end_ms:  60_000, color: '#3ed598' },
-  { id: 'ch-2', name: 'Build',  at_ms: 60_000, end_ms: 180_000, color: '#4dabf7' },
+  { id: 'ch-1', name: 'Intro',  at_ms:       0, end_ms:  60_000, color: '#3ed598' },
+  { id: 'ch-2', name: 'Build',  at_ms:  60_000, end_ms: 180_000, color: '#4dabf7' },
   { id: 'ch-3', name: 'Climax', at_ms: 180_000, end_ms: 260_000, color: '#ff7b7b' },
   { id: 'ch-4', name: 'Outro',  at_ms: 260_000, end_ms: 300_000, color: '#ffb547' },
 ];
 
-// Synthetic data the data-driven MediaViewer renderers can chew on.
 const FAKE_WAVEFORM = {
   peaks: Array.from({ length: 1200 }, (_, i) =>
     (Math.sin(i * 0.05) * 0.6 + Math.sin(i * 0.13) * 0.3 + (Math.random() - 0.5) * 0.2)
@@ -37,8 +44,6 @@ const FAKE_FUNSCRIPT = {
     pos: Math.round(50 + Math.sin(i * 0.5) * 35 + (i % 7) * 2),
   })),
 };
-// Phrase bands the ScriptChart will draw on top of the funscript curve.
-// Each maps to a chapter range; tags map to the FAKE_TAGS catalog below.
 const FAKE_TAGS = [
   { id: 'tease',   label: 'tease',   color: '#4dabf7' },
   { id: 'build',   label: 'build',   color: '#ffb547' },
@@ -52,38 +57,33 @@ const FAKE_PHRASES = [
   { id: 'p-4', start: 260_000, end: 300_000, tag: 'recover' },
 ];
 
+const TABS = [
+  { id: 'viewer',     label: 'Viewer',     icon: 'film',     pipeline: 'viewer'     },
+  { id: 'curve',      label: 'Curve',      icon: 'activity', pipeline: 'curve'      },
+  { id: 'primitives', label: 'Primitives', icon: 'layers',   pipeline: 'primitives' },
+];
+
+const HELP_ITEMS = [
+  { icon: 'file-text', label: 'README',          sub: 'github.com/liquid-releasing/forgemoment',
+    href: 'https://github.com/liquid-releasing/forgemoment' },
+  { icon: 'info',      label: 'About forgemoment', sub: 'v0.0.x · MIT license' },
+];
+
 export function App() {
-  // The master clock — owned by the parent here so we can demonstrate
-  // a play loop. In the real apps, this would be wired to a <video>
-  // element's timeupdate event or to a Web Audio AudioContext clock.
   const [currentMs, setCurrentMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [mode, setMode] = useState('video');
   const [batonObservers, setBatonObservers] = useState({ count: 0, lastMs: 0 });
-  // Chapters created from the Viewer's +Chapter button land here so the
-  // playground can prove the callback fires. Real consumers would push
-  // into a sidecar / chapter list and re-render.
   const [marks, setMarks] = useState([]);
-  // The +<markLabel> button is a generic integration point — the
-  // playground swaps the label to show that the SAME button can mean
-  // "create chapter" or "drop a beat" or "tag a note" depending on
-  // what the consuming app wires onMark to.
   const [markLabel, setMarkLabel] = useState('Chapter');
-  // The full chapter list the ChapterStrip renders. Marks the user
-  // adds via +Chapter prepend to this list (with auto-cycled palette
-  // colour); the Strip is click-to-select; whichever chapter is
-  // selected becomes the MediaViewer's `chapter` prop so the Viewer
-  // scopes to that chapter's slice.
   const [chapters, setChapters] = useState(INITIAL_CHAPTERS);
   const [scopedChapterId, setScopedChapterId] = useState(INITIAL_CHAPTERS[1].id);
-  // ScriptChart viewport: 'chapter' follows the scoped chapter; 'track'
-  // shows the entire track. Toggling proves the chart re-windows in
-  // place without remounting (no scrub-position lost, etc.).
   const [scriptViewport, setScriptViewport] = useState('chapter');
   const [selectedPhraseId, setSelectedPhraseId] = useState(null);
+  const [activeTab, setActiveTab] = useState('viewer');
+  const [accepted, setAccepted] = useState(false);
+
   const scopedChapter = chapters.find((c) => c.id === scopedChapterId) || null;
-  // MediaViewer's existing `chapter` prop wants {id, title, color, start, end}
-  // — map our richer chapter shape into that.
   const viewerChapter = scopedChapter && {
     id: scopedChapter.id,
     title: scopedChapter.name,
@@ -92,8 +92,8 @@ export function App() {
     end:   scopedChapter.end_ms,
   };
 
-  // Fake play loop: 24fps simulated playback. Demonstrates that the
-  // Viewer's onTimeChange fires as the clock advances.
+  // Fake play loop: drives currentMs forward in real time so the
+  // master-clock contract has something visible to lock onto.
   useEffect(() => {
     if (!isPlaying) return;
     let raf = 0;
@@ -113,47 +113,168 @@ export function App() {
     return () => cancelAnimationFrame(raf);
   }, [isPlaying]);
 
-  // "Other baton" — pretends to be a sibling subview that subscribes to
-  // the Viewer's master clock. Counter + last-ms readout proves the
-  // signal is firing.
   const handleTimeChange = (ms) => {
     setBatonObservers((b) => ({ count: b.count + 1, lastMs: ms }));
   };
 
-  return (
-    <div style={{
-      padding: 32, maxWidth: 1100, margin: '0 auto',
-      display: 'flex', flexDirection: 'column', gap: 32,
-    }}>
-      <SectionHeading
-        title="forgemoment playground"
-        subtitle="Dogfood the components. The MediaViewer drives the master clock; the sibling card subscribes to it."
-        right={<Pill tone="accent" dot>v0.0.1</Pill>}
-      />
+  // Build the ScopePicker entries from the chapter list + a virtual
+  // "All chapters" entry. The picker drives the same scopedChapterId
+  // the ChapterStrip and MediaViewer read.
+  const scopeOptions = [
+    { id: '__all', title: 'All chapters', color: '#94a3b8' },
+    ...chapters.map((c) => ({
+      id: c.id, title: c.name, color: c.color, start: c.at_ms, end: c.end_ms,
+    })),
+  ];
+  const scopeValue = scopedChapterId ?? '__all';
+  const handleScopeChange = (id) => setScopedChapterId(id === '__all' ? null : id);
 
-      {/* MediaViewer + sibling subscriber + ChapterStrip below */}
-      <Card padding={20}>
-        <div style={{ marginBottom: 16 }}>
+  // Pipeline state for the TabStrip — flips on "Accept" in any tab.
+  // Demonstrates the green-dot + ready-state machinery without
+  // hardwiring a real pipeline.
+  const pipelineState = {
+    viewer:     { accepted: activeTab !== 'viewer' || accepted },
+    curve:      { accepted: false },
+    primitives: { accepted: false },
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', minHeight: 0 }}>
+      <TopBar
+        logo={
           <div style={{
-            fontSize: 11, color: 'var(--text-muted)',
-            textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
-            display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+            display: 'flex', alignItems: 'center', gap: 8,
+            paddingRight: 4,
           }}>
-            <span>Chapter strip — click to scope the viewer</span>
-            <span className="mono" style={{ color: 'var(--text-dim)', fontSize: 10 }}>
-              {chapters.length} chapter{chapters.length === 1 ? '' : 's'}
-              {scopedChapter && ` · scoped: ${scopedChapter.name}`}
+            <div style={{
+              width: 24, height: 24, borderRadius: 6,
+              background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-warm) 100%)',
+            }} />
+            <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: '-0.01em' }}>
+              forgemoment
             </span>
           </div>
-          <ChapterStrip
-            chapters={chapters}
-            totalMs={TRACK_DURATION_MS}
-            currentMs={currentMs}
-            selectedId={scopedChapterId}
-            onSelect={(ch) => setScopedChapterId(ch.id)}
-            onSeek={setCurrentMs}
+        }
+        file={{
+          title: 'demo-track.mp4',
+          durationMs: TRACK_DURATION_MS,
+          phraseCount: FAKE_PHRASES.length,
+          actionCount: FAKE_FUNSCRIPT.actions.length,
+        }}
+        badge={<Pill tone="accent" dot>playground</Pill>}
+        scope={
+          <ScopePicker
+            scopes={scopeOptions}
+            value={scopeValue}
+            onChange={handleScopeChange}
           />
-        </div>
+        }
+        leftActions={
+          <>
+            <Button kind="ghost" size="icon" title="Undo"><span style={{ fontSize: 14 }}>↶</span></Button>
+            <Button kind="ghost" size="icon" title="Redo"><span style={{ fontSize: 14 }}>↷</span></Button>
+          </>
+        }
+        rightActions={
+          <>
+            <Button kind="secondary" size="sm" icon="folder">Open</Button>
+            <Button kind="primary" size="sm" icon="download">Export</Button>
+          </>
+        }
+      />
+
+      <TabStrip
+        tabs={TABS}
+        active={activeTab}
+        onChange={setActiveTab}
+        pipelineState={pipelineState}
+        helpItems={HELP_ITEMS}
+      />
+
+      <TabBody>
+        {activeTab === 'viewer' && (
+          <ViewerTab
+            currentMs={currentMs} setCurrentMs={setCurrentMs}
+            isPlaying={isPlaying} setIsPlaying={setIsPlaying}
+            mode={mode} setMode={setMode}
+            batonObservers={batonObservers} handleTimeChange={handleTimeChange}
+            marks={marks} setMarks={setMarks}
+            markLabel={markLabel} setMarkLabel={setMarkLabel}
+            chapters={chapters} setChapters={setChapters}
+            scopedChapterId={scopedChapterId} setScopedChapterId={setScopedChapterId}
+            viewerChapter={viewerChapter} scopedChapter={scopedChapter}
+          />
+        )}
+        {activeTab === 'curve' && (
+          <CurveTab
+            currentMs={currentMs} setCurrentMs={setCurrentMs}
+            scriptViewport={scriptViewport} setScriptViewport={setScriptViewport}
+            selectedPhraseId={selectedPhraseId} setSelectedPhraseId={setSelectedPhraseId}
+            scopedChapter={scopedChapter}
+          />
+        )}
+        {activeTab === 'primitives' && (
+          <PrimitivesTab mode={mode} setMode={setMode} />
+        )}
+      </TabBody>
+
+      {activeTab === 'viewer' && (
+        <AcceptBar
+          summary="Demo of AcceptBar — the pipeline ready-state machinery."
+          chainFile="viewer.chain.json"
+          accepted={accepted}
+          onAccept={() => setAccepted((a) => !a)}
+          onReset={() => setAccepted(false)}
+        />
+      )}
+
+      <StatusBar
+        synced
+        scope={scopedChapter ? scopedChapter.name : 'all chapters'}
+        chainFile="viewer.chain.json"
+        version="forgemoment v0.0.x · playground"
+      />
+    </div>
+  );
+}
+
+// ─── Tabs ───────────────────────────────────────────────────────────
+
+function ViewerTab({
+  currentMs, setCurrentMs, isPlaying, setIsPlaying, mode, setMode,
+  batonObservers, handleTimeChange,
+  marks, setMarks, markLabel, setMarkLabel,
+  chapters, setChapters, scopedChapterId, setScopedChapterId,
+  viewerChapter, scopedChapter,
+}) {
+  return (
+    <>
+      <TabHeader
+        eyebrow="Viewer"
+        title="MediaViewer + ChapterStrip + master clock"
+        subtitle="Three-mode thumbnail with a sibling subscriber locked to the Viewer's emitted time. Mark with +Chapter to append to the strip below; click any chapter to scope + seek the Viewer to it."
+      />
+
+      <SectionLabel right={
+        <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'none' }}>
+          {chapters.length} chapter{chapters.length === 1 ? '' : 's'}
+          {scopedChapter && ` · scoped: ${scopedChapter.name}`}
+        </span>
+      }>
+        Chapter strip — click to scope + seek
+      </SectionLabel>
+      <div style={{ marginBottom: 22 }}>
+        <ChapterStrip
+          chapters={chapters}
+          totalMs={TRACK_DURATION_MS}
+          currentMs={currentMs}
+          selectedId={scopedChapterId}
+          onSelect={(ch) => setScopedChapterId(ch.id)}
+          onSeek={setCurrentMs}
+        />
+      </div>
+
+      <Card padding={20}>
         <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
           <MediaViewer
             currentMs={currentMs}
@@ -167,21 +288,12 @@ export function App() {
             onNext={() => setCurrentMs(Math.min(TRACK_DURATION_MS, currentMs + 30_000))}
             onMark={(ms) => {
               setMarks((m) => [...m, { kind: markLabel, at_ms: ms }]);
-              // When the user is marking Chapters specifically, also
-              // append to the live chapter list so the ChapterStrip
-              // below the Viewer renders it immediately. Other mark
-              // kinds (Beat / Note / Cue) just go to the marks card.
               if (markLabel === 'Chapter') {
                 const newId = `ch-mark-${Date.now()}`;
-                setChapters((cs) => {
-                  // Insert in time order, then re-bound the neighbouring
-                  // chapters' end_ms / at_ms so the strip stays gapless.
-                  const next = [...cs, {
-                    id: newId, name: `Chapter ${cs.length + 1}`,
-                    at_ms: ms,
-                  }];
-                  return next.sort((a, b) => a.at_ms - b.at_ms);
-                });
+                setChapters((cs) => [
+                  ...cs,
+                  { id: newId, name: `Chapter ${cs.length + 1}`, at_ms: ms },
+                ].sort((a, b) => a.at_ms - b.at_ms));
               }
             }}
             markLabel={markLabel}
@@ -221,22 +333,21 @@ export function App() {
           </div>
         </div>
       </Card>
+    </>
+  );
+}
 
-      {/* ScriptChart — funscript curve with phrase tag bands.
-          Demonstrates two viewport modes: scoped to the current
-          chapter, or full-track. Clicking on the chart seeks the
-          playhead (same setCurrentMs all the other controls use). */}
-      <Card padding={20}>
-        <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
-          marginBottom: 14, gap: 16,
-        }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>ScriptChart</h3>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Funscript curve with phrase tag bands. Click to seek; click a phrase band to select it.
-            </div>
-          </div>
+function CurveTab({
+  currentMs, setCurrentMs, scriptViewport, setScriptViewport,
+  selectedPhraseId, setSelectedPhraseId, scopedChapter,
+}) {
+  return (
+    <>
+      <TabHeader
+        eyebrow="Curve"
+        title="ScriptChart — the funscript curve"
+        subtitle="Phrase tag bands across the top, click-to-seek anywhere on the canvas. Viewport toggles between the scoped chapter and the full track."
+        right={
           <Field label="Viewport">
             <Segmented
               options={[
@@ -247,25 +358,34 @@ export function App() {
               onChange={setScriptViewport}
             />
           </Field>
-        </div>
-        <ScriptChart
-          actions={FAKE_FUNSCRIPT.actions}
-          phrases={FAKE_PHRASES}
-          tags={FAKE_TAGS}
-          totalMs={TRACK_DURATION_MS}
-          startMs={scriptViewport === 'chapter' && scopedChapter ? scopedChapter.at_ms : 0}
-          endMs={scriptViewport === 'chapter' && scopedChapter ? scopedChapter.end_ms : TRACK_DURATION_MS}
-          currentMs={currentMs}
-          onSeek={setCurrentMs}
-          selectedPhraseId={selectedPhraseId}
-          onSelectPhrase={setSelectedPhraseId}
-          height={200}
-        />
-      </Card>
+        }
+      />
+      <ScriptChart
+        actions={FAKE_FUNSCRIPT.actions}
+        phrases={FAKE_PHRASES}
+        tags={FAKE_TAGS}
+        totalMs={TRACK_DURATION_MS}
+        startMs={scriptViewport === 'chapter' && scopedChapter ? scopedChapter.at_ms : 0}
+        endMs={scriptViewport === 'chapter' && scopedChapter ? scopedChapter.end_ms : TRACK_DURATION_MS}
+        currentMs={currentMs}
+        onSeek={setCurrentMs}
+        selectedPhraseId={selectedPhraseId}
+        onSelectPhrase={setSelectedPhraseId}
+        height={260}
+      />
+    </>
+  );
+}
 
-      {/* Primitives gallery */}
+function PrimitivesTab({ mode, setMode }) {
+  return (
+    <>
+      <TabHeader
+        eyebrow="Primitives"
+        title="Base UI kit"
+        subtitle="The small components every studio app composes with. Pulled straight from primitives.jsx."
+      />
       <Card padding={20}>
-        <h3 style={{ marginTop: 0, marginBottom: 16 }}>Primitives</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 18 }}>
           <Field label="Buttons">
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -299,18 +419,13 @@ export function App() {
           </Field>
         </div>
       </Card>
-    </div>
+    </>
   );
 }
 
+// ─── Cards used inside ViewerTab ────────────────────────────────────
+
 function MarksCard({ marks, markLabel, onLabelChange, onClear }) {
-  // The +<markLabel> button on the Viewer is a generic integration
-  // point — the label here drives what the button says AND what the
-  // collected marks get tagged as. Same code path; different meaning
-  // per consumer. Switching the label mid-session shows the marks
-  // collected under multiple labels, which is the real cross-app
-  // story: one app might collect "Chapter" marks AND "Beat" marks
-  // simultaneously by toggling.
   const LABEL_OPTIONS = ['Chapter', 'Beat', 'Note', 'Cue'];
   return (
     <Card padding={14}>

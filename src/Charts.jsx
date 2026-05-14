@@ -1,7 +1,8 @@
 // Shared visualisation primitives — pure SVG so they stay crisp at any
 // zoom. Ported from forge-ui-design/iterations/08-redesign/design_files/Charts.jsx
-// per the REUSABLE_INVENTORY.md plan, scope-trimmed to the v0.0.2 subset
-// (timeline / phrase / chapter strip primitives + small utilities).
+// per the REUSABLE_INVENTORY.md plan. v0.0.2 ports the remaining Charts
+// components (PreviewChart, PhraseDetailZoomChart, ScopePlayer, MiniWave,
+// Sparkline, DiffSparkline) — Charts.jsx is now fully carved out.
 //
 // Shipped here:
 //   - PhraseRibbon         — horizontal phrase strip with click-to-select
@@ -9,27 +10,27 @@
 //   - ChapterStrip   (NEW) — chapter list as a click-to-scope strip;
 //                            closes the +mark → visible chapter loop
 //   - ScriptChart          — funscript curve over a window
+//   - PreviewChart         — Original / Preview stacked ScriptCharts
+//                            (the canonical before/after view)
 //   - BpmBandChart         — full-script colored funscript: phrase
 //                            bands by BPM tier + curve overlay. The
 //                            canonical "colored funscript" view.
+//   - PhraseDetailZoomChart — single-phrase close-up with every action
+//                            drawn as a connected dot. Companion to
+//                            BpmBandChart for drill-in views.
+//   - ScopePlayer          — composite player (video poster + scoped
+//                            ScriptChart + transport row)
+//   - MiniWave             — small waveform thumbnail for list rows
+//   - Sparkline            — phrase-mini funscript line for tables
+//   - DiffSparkline        — original-vs-preview overlay sparkline
 //   - ChartTitleStrip      — header strip (title · meta · meta · time)
 //   - BPM_TIERS, bpmTier   — small classification utility
 //   - tagColor, tagLabel   — phrase-tag → color/label, with `tags` prop
 //                            for the lookup table (was window.FF_TAGS
 //                            in the iter 08 Babel build).
-//
-// Deferred to a future version (port when consumers actually need them):
-//   - PreviewChart         — original-vs-preview overlay (depends on
-//                            ScriptChart, which is now ported)
-//   - ScopePlayer          — composite player widget
-//   - MiniWave             — small waveform thumbnail
-//   - Sparkline            — phrase-mini sparkline
-//   - DiffSparkline        — diff visualization
-//   - PhraseDetailZoomChart — zoomed phrase close-up (companion to
-//                            BpmBandChart for drilled-in views)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fmtTimeShort } from './primitives.jsx';
+import { Button, Icon, Pill, fmtTime, fmtTimeShort } from './primitives.jsx';
 
 // ─── BPM tiers ──────────────────────────────────────────────────────
 //
@@ -787,5 +788,389 @@ export function ChartTitleStrip({ title, meta = [] }) {
         </span>
       ))}
     </div>
+  );
+}
+
+// ─── PreviewChart ────────────────────────────────────────────────────
+//
+// Two stacked ScriptCharts — original on top, transformed preview below.
+// The canonical "before / after" view consumers paint when they want the
+// user to compare a proposed edit against the current state. Each chart
+// is BPM-tier tinted via `bpmTier(...).dot` so the eye reads which side
+// is the higher-energy one at a glance.
+//
+// props:
+//   original  — { actions, bpm, start, end }
+//   preview   — { actions, bpm, start, end }  (same axes as original)
+//   label     — caption for the preview row ("Preview" by default)
+//   highlight — optional { start, end, label } drawn in BOTH charts so
+//               a user can see how the edit lands across both
+export function PreviewChart({ original, preview, label = 'Preview', highlight }) {
+  const origTier = bpmTier(original.bpm);
+  const prevTier = bpmTier(preview.bpm);
+  const origTone = { fill: origTier.dot, stroke: origTier.dot, dot: origTier.dot };
+  const prevTone = { fill: prevTier.dot, stroke: prevTier.dot, dot: prevTier.dot };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between',
+          fontSize: 11, color: 'var(--text-dim)', marginBottom: 4,
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600,
+        }}>
+          <span>Original{highlight?.label ? ` · highlighting ${highlight.label}` : ''}</span>
+          <span className="mono">{original.actions.length} actions · {original.bpm} BPM</span>
+        </div>
+        <ScriptChart actions={original.actions} totalMs={original.end - original.start}
+                     startMs={original.start} endMs={original.end}
+                     phrases={[]} showPhraseTags={false} height={170}
+                     showActions="always" tone={origTone} highlight={highlight} />
+      </div>
+      <div>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between',
+          fontSize: 11, color: prevTier.dot,
+          marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600,
+        }}>
+          <span>{label}{highlight?.label ? ` · ${highlight.label}` : ''}</span>
+          <span className="mono">{preview.actions.length} actions · {preview.bpm} BPM</span>
+        </div>
+        <ScriptChart actions={preview.actions} totalMs={preview.end - preview.start}
+                     startMs={preview.start} endMs={preview.end}
+                     phrases={[]} showPhraseTags={false} height={170}
+                     showActions="always" tone={prevTone} highlight={highlight} />
+      </div>
+    </div>
+  );
+}
+
+// ─── PhraseDetailZoomChart ───────────────────────────────────────────
+//
+// Single-phrase close-up: every action drawn as a connected dot. BPM-tier
+// tint behind. Used by phrase-editor / drill-in views — replaces the
+// dense BpmBandChart overview when the user has zoomed into one phrase
+// and wants per-action visibility.
+//
+// props:
+//   phrase   — { start, end, bpm }
+//   actions  — array of { at, pos } INSIDE this phrase
+//   index    — 0-based ordinal in the script; rendered as `Phrase N`
+//   cycles   — pre-computed cycle count (BPM × duration / 60); auto if omitted
+//   label    — overrides the leading "Phrase N" if you want
+export function PhraseDetailZoomChart({
+  phrase, actions = [], index = 0, cycles, label, height = 220,
+}) {
+  const wrapRef = useRef(null);
+  const [width, setWidth] = useState(900);
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const tier = bpmTier(phrase.bpm);
+  const dur = phrase.end - phrase.start;
+  const cy = cycles ?? Math.round((phrase.bpm * dur) / 60000);
+
+  const padTop = 14, padBottom = 24, padLeft = 38, padRight = 14;
+  const plotH = height - padTop - padBottom;
+  const plotW = Math.max(0, width - padLeft - padRight);
+  const xFor = (ms) => padLeft + ((ms - phrase.start) / dur) * plotW;
+  const yFor = (pos) => padTop + (1 - pos / 100) * plotH;
+
+  // Time-tick selection — fine-grained for short phrases.
+  const ticks = useMemo(() => {
+    const niceSteps = [500, 1000, 2000, 5000, 10000];
+    const step = niceSteps.find(s => dur / s < 12) ?? 10000;
+    const first = Math.ceil(phrase.start / step) * step;
+    const out = [];
+    for (let t = first; t <= phrase.end; t += step) out.push(t);
+    return out;
+  }, [phrase.start, phrase.end, dur]);
+
+  const pathD = actions.length === 0 ? '' : actions.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'} ${xFor(p.at).toFixed(1)} ${yFor(p.pos).toFixed(1)}`
+  ).join(' ');
+
+  const meta = [
+    `${fmtTimeShort(phrase.start)}–${fmtTimeShort(phrase.end)}`,
+    `${(dur / 1000).toFixed(1)}s`,
+    `${phrase.bpm} BPM`,
+    `${cy} cycles`,
+  ];
+
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 10, overflow: 'hidden',
+    }}>
+      <ChartTitleStrip title={label ?? `Phrase ${index + 1}`} meta={meta} />
+      <div ref={wrapRef} style={{ background: 'var(--bg)' }}>
+        <svg width={width} height={height} style={{ display: 'block' }}>
+          <rect x={padLeft} y={padTop} width={plotW} height={plotH} fill={tier.fill} />
+          <line x1={padLeft} x2={padLeft} y1={padTop} y2={padTop + plotH}
+                stroke={tier.stroke} strokeWidth={2} />
+          <line x1={padLeft + plotW} x2={padLeft + plotW}
+                y1={padTop} y2={padTop + plotH}
+                stroke={tier.stroke} strokeWidth={2} />
+
+          {[0, 25, 50, 75, 100].map(p => (
+            <g key={p}>
+              <line x1={padLeft} x2={padLeft + plotW} y1={yFor(p)} y2={yFor(p)}
+                    stroke="var(--border)"
+                    strokeOpacity={p === 50 ? 0.45 : 0.18}
+                    strokeDasharray={p === 50 ? '' : '2 4'} />
+              <text x={padLeft - 6} y={yFor(p) + 3} textAnchor="end"
+                    fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)">
+                {p}
+              </text>
+            </g>
+          ))}
+          <text x={6} y={padTop + plotH / 2} textAnchor="middle"
+                fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)"
+                transform={`rotate(-90 12 ${padTop + plotH / 2})`}>
+            Position (0–100)
+          </text>
+
+          {ticks.map(t => (
+            <g key={t}>
+              <line x1={xFor(t)} x2={xFor(t)} y1={padTop + plotH}
+                    y2={padTop + plotH + 3}
+                    stroke="var(--border)" strokeOpacity={0.45} />
+              <text x={xFor(t)} y={height - 8} textAnchor="middle"
+                    fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)">
+                {fmtTimeShort(t)}
+              </text>
+            </g>
+          ))}
+          <text x={padLeft + plotW / 2} y={height - 1} textAnchor="middle"
+                fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)">
+            Time
+          </text>
+
+          {pathD && <path d={pathD} fill="none"
+                          stroke="#4dabf7" strokeWidth={2}
+                          strokeLinejoin="round" strokeLinecap="round" />}
+          {actions.map((p, i) => (
+            <circle key={i} cx={xFor(p.at)} cy={yFor(p.pos)} r={3}
+                    fill={tier.dot} stroke="#0c0d10" strokeWidth={1} />
+          ))}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// ─── ScopePlayer ─────────────────────────────────────────────────────
+//
+// Composite player widget: stylised video frame on top, scoped
+// ScriptChart underneath, transport row at the bottom. The "scope" is
+// what the player is locked to — a chapter / phrase / pattern / whole
+// script — surfaced as a chip in the corner.
+//
+// `videoSrc` is optional; without it the player shows the same stylised
+// film poster the MediaViewer uses as its video-mode fallback. Once a
+// consumer is ready to render real video they pass a URL here; the
+// component does not try to abstract <video> playback (that lives in
+// MediaViewer).
+//
+// props:
+//   scope          — { kind:'script'|'chapter'|'phrase'|'pattern',
+//                      label, start, end }
+//   actions        — full-script action array (will be windowed to scope)
+//   phrases        — phrase list for the ScriptChart bands (optional)
+//   tags           — phrase-tag catalog forwarded to ScriptChart
+//   currentMs      — controlled playhead
+//   isPlaying      — controlled play state
+//   onPlayPause    — invoked from the center poster button + transport
+//   onSeek(ms)     — clicking the chart row routes here
+//   height         — chart strip height (default 280)
+//   compact        — drops phrase tags + tightens spacing for sidebars
+export function ScopePlayer({
+  scope, actions, phrases, tags = [], currentMs, isPlaying,
+  onPlayPause, onSeek, height = 280, compact = false,
+}) {
+  const dur = scope.end - scope.start;
+  const localMs = Math.max(scope.start, Math.min(scope.end, currentMs ?? scope.start));
+  const scopeIcon =
+    scope.kind === 'script'   ? 'film' :
+    scope.kind === 'chapter'  ? 'bookmark' :
+    scope.kind === 'phrase'   ? 'scan-line' :
+    scope.kind === 'pattern'  ? 'shapes' : 'film';
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 10, overflow: 'hidden',
+    }}>
+      <div style={{
+        position: 'relative', aspectRatio: compact ? 'auto' : '16 / 9',
+        height: compact ? height : 'auto',
+        background: 'linear-gradient(135deg, #1a1d2c, #0e1117)',
+        display: 'grid', placeItems: 'center', borderBottom: '1px solid var(--border)',
+      }}>
+        <svg viewBox="0 0 200 112" style={{ width: '100%', height: '100%', opacity: 0.5 }}
+             preserveAspectRatio="xMidYMid slice">
+          <defs>
+            <linearGradient id="forgemoment-scopeplayer-grain" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#2d3148" />
+              <stop offset="50%" stopColor="#1a1d2c" />
+              <stop offset="100%" stopColor="#3a3f5c" />
+            </linearGradient>
+          </defs>
+          <rect width="200" height="112" fill="url(#forgemoment-scopeplayer-grain)" />
+          <circle cx="100" cy="56" r="22" fill="rgba(0,0,0,0.4)" />
+          <polygon points="94,46 94,66 112,56" fill="rgba(255,255,255,0.7)" />
+        </svg>
+
+        <div style={{
+          position: 'absolute', top: 12, left: 12,
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 10px', background: 'rgba(0,0,0,0.6)', borderRadius: 999,
+          fontSize: 11, color: '#fff', fontWeight: 600, backdropFilter: 'blur(8px)',
+        }}>
+          <Icon name={scopeIcon} size={11} />
+          <span>{scope.label}</span>
+          <span className="mono" style={{ opacity: 0.6 }}>·</span>
+          <span className="mono" style={{ opacity: 0.7 }}>
+            {fmtTimeShort(scope.start)}–{fmtTimeShort(scope.end)}
+          </span>
+        </div>
+
+        <button onClick={onPlayPause} style={{
+          position: 'absolute', inset: 0, background: 'transparent', border: 'none',
+          cursor: 'pointer', display: 'grid', placeItems: 'center',
+        }}>
+          <span style={{
+            width: 56, height: 56, borderRadius: '50%', background: 'rgba(255,255,255,0.18)',
+            backdropFilter: 'blur(8px)', display: 'grid', placeItems: 'center',
+            border: '1px solid rgba(255,255,255,0.3)',
+          }}>
+            <Icon name={isPlaying ? 'pause' : 'play'} size={22} stroke={2} style={{ color: '#fff' }} />
+          </span>
+        </button>
+      </div>
+
+      <div style={{ padding: '10px 12px 14px' }}>
+        <ScriptChart actions={actions} phrases={phrases ?? []} tags={tags}
+                     totalMs={scope.end - scope.start}
+                     startMs={scope.start} endMs={scope.end}
+                     currentMs={localMs} onSeek={onSeek}
+                     height={92} showPhraseTags={!compact}
+                     showActions={scope.kind === 'phrase' ? 'always' : 'auto'} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10 }}>
+          <Button kind="ghost" size="icon" title="Skip back"><Icon name="skip-back" size={14} /></Button>
+          <Button kind="primary" size="icon" onClick={onPlayPause}>
+            <Icon name={isPlaying ? 'pause' : 'play'} size={14} />
+          </Button>
+          <Button kind="ghost" size="icon" title="Skip forward"><Icon name="skip-forward" size={14} /></Button>
+          <span className="mono" style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+            <span style={{ color: 'var(--text)' }}>{fmtTime(localMs - scope.start)}</span>
+            <span style={{ opacity: 0.4 }}> / {fmtTime(dur)}</span>
+          </span>
+          <div style={{ flex: 1 }} />
+          <Pill tone="neutral">scope: {scope.kind}</Pill>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MiniWave ────────────────────────────────────────────────────────
+//
+// Tiny inline waveform from a seed string — same shape for the same
+// seed across renders so cards / list rows feel stable. Pure SVG with
+// no audio decode; this is a visual placeholder, not a real renderer.
+// Useful for chapter rows / track previews / browse cards where a
+// real waveform would be overkill.
+export function MiniWave({ seed = '', color = '#ff7b7b', height = 24 }) {
+  let s = 0;
+  for (let i = 0; i < seed.length; i++) s = (s * 31 + seed.charCodeAt(i)) >>> 0;
+  const rand = () => { s = (s * 1664525 + 1013904223) >>> 0; return (s & 0xffff) / 65535; };
+  const N = 40;
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const v = 50 + 30 * Math.sin(t * 8 + rand() * 2) + (rand() - 0.5) * 22;
+    pts.push([t * 100, Math.max(8, Math.min(92, v))]);
+  }
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ');
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+         style={{ width: '100%', height }}>
+      <path d={`${d} L 100 100 L 0 100 Z`} fill={color} fillOpacity={0.18} />
+      <path d={d} fill="none" stroke={color} strokeWidth={1.4}
+            vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// ─── Sparkline ───────────────────────────────────────────────────────
+//
+// Tiny actions chart for table rows / phrase lists. Maps `at` → x and
+// `pos` → y so it reads as a miniaturised funscript line. `filled=true`
+// closes the path to the baseline for a more iconic "shape".
+export function Sparkline({
+  actions, start, end, color = 'var(--accent)', filled = false, height = 30,
+}) {
+  if (!actions || actions.length === 0) {
+    return <div style={{ height, background: 'var(--surface-2)', borderRadius: 3 }} />;
+  }
+  const dur = Math.max(1, end - start);
+  const pts = actions.map(a => [((a.at - start) / dur) * 100, 100 - a.pos]);
+  const d = pts.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`
+  ).join(' ');
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+         style={{ width: '100%', height, background: 'var(--bg)', borderRadius: 3 }}>
+      {filled && <path d={`${d} L 100 100 L 0 100 Z`} fill={color} fillOpacity={0.22} />}
+      <path d={d} fill="none" stroke={color} strokeWidth={1.4}
+            vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// ─── DiffSparkline ───────────────────────────────────────────────────
+//
+// Overlay chart for stacked-edit rows: shows original as a ghost
+// (faint dashed) beneath the preview (solid filled). Same X/Y space
+// so any deviation reads instantly even at row-heights of ~40–80px.
+// The natural micro-counterpart to PreviewChart.
+export function DiffSparkline({
+  original, preview, start, end,
+  color = 'var(--accent)', height = 56,
+  ghostColor = 'var(--text-dim)',
+}) {
+  const dur = Math.max(1, end - start);
+  const path = (acts) => {
+    if (!acts || acts.length === 0) return '';
+    return acts.map((a, i) => {
+      const x = ((a.at - start) / dur) * 100;
+      const y = 100 - a.pos;
+      return `${i === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(' ');
+  };
+  const dOrig = path(original);
+  const dPrev = path(preview);
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+         style={{ width: '100%', height, background: 'var(--bg)', borderRadius: 3,
+                  display: 'block' }}>
+      {dOrig && (
+        <path d={dOrig} fill="none" stroke={ghostColor} strokeWidth={1.2}
+              strokeDasharray="2 2" strokeOpacity={0.55}
+              vectorEffect="non-scaling-stroke" />
+      )}
+      {dPrev && (
+        <>
+          <path d={`${dPrev} L 100 100 L 0 100 Z`} fill={color} fillOpacity={0.22} />
+          <path d={dPrev} fill="none" stroke={color} strokeWidth={1.6}
+                vectorEffect="non-scaling-stroke" />
+        </>
+      )}
+    </svg>
   );
 }

@@ -17,12 +17,12 @@ import {
   // files reference. Adding a new icon is a one-line lookup + dynamic
   // import; falling back to a generic placeholder when an icon name
   // isn't mapped means a typo doesn't crash the app.
-  Activity, AlertCircle, ArrowLeft, ArrowRight, Box, Check, ChevronDown,
+  Activity, AlertCircle, ArrowLeft, ArrowRight, Bookmark, Box, Check, ChevronDown,
   ChevronLeft, ChevronRight, ChevronUp, Circle, Cog, Copy, Download,
   Edit, ExternalLink, Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, HelpCircle,
   Home, Image, Info, Layers, Library, List, Loader, Lock, LogIn, LogOut,
   Maximize, Menu, MoreHorizontal, MoreVertical, Move, Music, Pause, Pencil,
-  Play, Plus, Radio, RefreshCcw, RotateCcw, Save, Search, Settings, Share2,
+  Play, Plus, Radio, RefreshCcw, RotateCcw, Save, ScanLine, Search, Settings, Shapes, Share2,
   SkipBack, SkipForward, Sliders, Square, Star, StepBack, StepForward,
   Trash, Trash2, Upload, User, Video, Volume2, VolumeX, X, Zap,
   ZoomIn, ZoomOut,
@@ -30,7 +30,7 @@ import {
 
 const LUCIDE_MAP = {
   activity: Activity, 'alert-circle': AlertCircle, 'arrow-left': ArrowLeft,
-  'arrow-right': ArrowRight, box: Box, check: Check,
+  'arrow-right': ArrowRight, bookmark: Bookmark, box: Box, check: Check,
   'chevron-down': ChevronDown, 'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight, 'chevron-up': ChevronUp, circle: Circle,
   cog: Cog, copy: Copy, download: Download, edit: Edit,
@@ -43,7 +43,8 @@ const LUCIDE_MAP = {
   'more-vertical': MoreVertical, move: Move, music: Music, pause: Pause,
   pencil: Pencil, play: Play, plus: Plus, radio: Radio,
   'refresh-ccw': RefreshCcw, 'rotate-ccw': RotateCcw, save: Save,
-  search: Search, settings: Settings, 'share-2': Share2, 'skip-back': SkipBack,
+  'scan-line': ScanLine, search: Search, settings: Settings, shapes: Shapes,
+  'share-2': Share2, 'skip-back': SkipBack,
   'skip-forward': SkipForward, sliders: Sliders, square: Square, star: Star,
   'step-back': StepBack, 'step-forward': StepForward,
   trash: Trash, 'trash-2': Trash2, upload: Upload, user: User, video: Video,

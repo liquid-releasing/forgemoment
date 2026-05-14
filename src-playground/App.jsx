@@ -15,12 +15,13 @@
 // live in the parent and flow through forgemoment without re-mounting
 // the Viewer between tabs.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  AcceptBar, BpmBandChart, Button, Card, ChapterStrip, Field,
-  HoldSeekButton, MediaViewer, Pill, ScopePicker, ScriptChart,
-  SectionLabel, Segmented, Slider, StatusBar, TabBody, TabHeader,
-  TabStrip, TextInput, TopBar, TransformPanel, fmtTime,
+  AcceptBar, BpmBandChart, Button, Card, ChapterStrip, DiffSparkline,
+  Field, HoldSeekButton, MediaViewer, MiniWave, PhraseDetailZoomChart,
+  Pill, PreviewChart, ScopePicker, ScopePlayer, ScriptChart,
+  SectionLabel, Segmented, Slider, Sparkline, StatusBar, TabBody,
+  TabHeader, TabStrip, TextInput, TopBar, TransformPanel, fmtTime,
 } from 'forgemoment';
 
 const TRACK_DURATION_MS = 300_000; // 5 minutes
@@ -286,9 +287,11 @@ export function App() {
         {activeTab === 'curve' && (
           <CurveTab
             currentMs={currentMs} setCurrentMs={setCurrentMs}
+            isPlaying={isPlaying} setIsPlaying={setIsPlaying}
             scriptViewport={scriptViewport} setScriptViewport={setScriptViewport}
             selectedPhraseId={selectedPhraseId} setSelectedPhraseId={setSelectedPhraseId}
             scopedChapter={scopedChapter}
+            chapters={chapters}
           />
         )}
         {activeTab === 'transform' && (
@@ -318,7 +321,7 @@ export function App() {
         synced
         scope={scopedChapter ? scopedChapter.name : 'all chapters'}
         chainFile="viewer.chain.json"
-        version="forgemoment v0.0.x · playground"
+        version="forgemoment v0.0.2 · playground"
       />
     </div>
   );
@@ -424,9 +427,42 @@ function ViewerTab({
 }
 
 function CurveTab({
-  currentMs, setCurrentMs, scriptViewport, setScriptViewport,
-  selectedPhraseId, setSelectedPhraseId, scopedChapter,
+  currentMs, setCurrentMs, isPlaying, setIsPlaying,
+  scriptViewport, setScriptViewport,
+  selectedPhraseId, setSelectedPhraseId, scopedChapter, chapters,
 }) {
+  // Selected phrase for the drill-in close-up. Falls back to whichever
+  // phrase the playhead is currently inside, then to the first phrase.
+  const focusPhrase = useMemo(() => {
+    if (selectedPhraseId) {
+      const hit = FAKE_PHRASES.find((p) => p.id === selectedPhraseId);
+      if (hit) return hit;
+    }
+    return FAKE_PHRASES.find((p) => currentMs >= p.start && currentMs < p.end)
+      ?? FAKE_PHRASES[0];
+  }, [selectedPhraseId, currentMs]);
+
+  // Actions inside the focused phrase — fed to the zoom chart.
+  const focusActions = useMemo(
+    () => FAKE_FUNSCRIPT.actions.filter(
+      (a) => a.at >= focusPhrase.start && a.at <= focusPhrase.end
+    ),
+    [focusPhrase]
+  );
+
+  // Build a fake "transformed preview" by halving the action density —
+  // gives PreviewChart + DiffSparkline visible deviation against the
+  // original without needing a real transform pipeline.
+  const previewActions = useMemo(
+    () => FAKE_FUNSCRIPT.actions.filter((_, i) => i % 2 === 0),
+    []
+  );
+
+  const scopeForPlayer = scopedChapter
+    ? { kind: 'chapter', label: scopedChapter.name,
+        start: scopedChapter.at_ms, end: scopedChapter.end_ms }
+    : { kind: 'script', label: 'demo-track', start: 0, end: TRACK_DURATION_MS };
+
   return (
     <>
       <TabHeader
@@ -446,6 +482,32 @@ function CurveTab({
           </Field>
         }
       />
+
+      {/* ScopePlayer — composite player widget. Stylised poster + a
+          scoped ScriptChart + transport row. Locks to the current scope
+          (a chapter when one's picked, the whole script otherwise) and
+          shares the master clock — clicking its chart strip seeks the
+          rest of the app. */}
+      <div style={{ marginBottom: 22 }}>
+        <SectionLabel right={
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'none' }}>
+            scope chip top-left · transport shares the master clock
+          </span>
+        }>
+          ScopePlayer — composite player
+        </SectionLabel>
+        <ScopePlayer
+          scope={scopeForPlayer}
+          actions={FAKE_FUNSCRIPT.actions}
+          phrases={FAKE_PHRASES}
+          tags={FAKE_TAGS}
+          currentMs={currentMs}
+          isPlaying={isPlaying}
+          onPlayPause={() => setIsPlaying((p) => !p)}
+          onSeek={setCurrentMs}
+        />
+      </div>
+
       <ScriptChart
         actions={FAKE_FUNSCRIPT.actions}
         phrases={FAKE_PHRASES}
@@ -482,6 +544,117 @@ function CurveTab({
           onSeek={setCurrentMs}
           height={240}
         />
+      </div>
+
+      {/* PreviewChart — Original vs Preview, stacked. Halved-density
+          preview gives a visible before/after even with no real
+          transform pipeline behind it. */}
+      <div style={{ marginTop: 22 }}>
+        <SectionLabel right={
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'none' }}>
+            BPM-tier tone per row · `highlight` prop ranges both charts
+          </span>
+        }>
+          PreviewChart — Original vs Preview
+        </SectionLabel>
+        <Card padding={14}>
+          <PreviewChart
+            original={{
+              actions: FAKE_FUNSCRIPT.actions,
+              bpm: 92, start: 0, end: TRACK_DURATION_MS,
+            }}
+            preview={{
+              actions: previewActions,
+              bpm: 64, start: 0, end: TRACK_DURATION_MS,
+            }}
+            label="Preview · density × 0.5"
+            highlight={scopedChapter
+              ? { start: scopedChapter.at_ms, end: scopedChapter.end_ms,
+                  label: scopedChapter.name }
+              : undefined}
+          />
+        </Card>
+      </div>
+
+      {/* PhraseDetailZoomChart — drill-in companion to BpmBandChart.
+          Every action drawn as a connected dot inside the focused
+          phrase; click the BPM ribbon on the ScriptChart above to
+          switch the focus. */}
+      <div style={{ marginTop: 22 }}>
+        <SectionLabel right={
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'none' }}>
+            focused phrase: {focusPhrase.id} · {focusActions.length} actions inside
+          </span>
+        }>
+          PhraseDetailZoomChart — single-phrase close-up
+        </SectionLabel>
+        <PhraseDetailZoomChart
+          phrase={focusPhrase}
+          actions={focusActions}
+          index={FAKE_PHRASES.indexOf(focusPhrase)}
+        />
+      </div>
+
+      {/* Small charts grid — MiniWave per chapter, Sparkline per
+          phrase, and a single DiffSparkline summary. Mirrors how a
+          consuming app uses these inside list rows / table cells. */}
+      <div style={{ marginTop: 22 }}>
+        <SectionLabel>Small charts — MiniWave / Sparkline / DiffSparkline</SectionLabel>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <Card padding={14}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+              MiniWave — one per chapter
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {chapters.map((ch) => (
+                <div key={ch.id} style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: 10, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text)' }}>{ch.name}</span>
+                  <MiniWave seed={ch.id} color={ch.color} />
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Card padding={14}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+              Sparkline — one per phrase
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {FAKE_PHRASES.map((p) => {
+                const phraseActions = FAKE_FUNSCRIPT.actions.filter(
+                  (a) => a.at >= p.start && a.at <= p.end
+                );
+                const tagDef = FAKE_TAGS.find((t) => t.id === p.tag);
+                return (
+                  <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: 10, alignItems: 'center' }}>
+                    <span style={{ fontSize: 12, color: 'var(--text)' }}>{tagDef?.label ?? p.tag}</span>
+                    <Sparkline
+                      actions={phraseActions}
+                      start={p.start} end={p.end}
+                      color={tagDef?.color ?? 'var(--accent)'}
+                      filled
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        </div>
+        <Card padding={14} style={{ marginTop: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 }}>
+              DiffSparkline — Original (ghost) vs Preview (filled)
+            </div>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              {FAKE_FUNSCRIPT.actions.length} → {previewActions.length} actions
+            </span>
+          </div>
+          <DiffSparkline
+            original={FAKE_FUNSCRIPT.actions}
+            preview={previewActions}
+            start={0} end={TRACK_DURATION_MS}
+            height={56}
+          />
+        </Card>
       </div>
     </>
   );

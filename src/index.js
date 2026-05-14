@@ -41,16 +41,22 @@ export {
 // 08's window.FF_TRANSFORMS / window.FF_TAGS).
 export { TransformPanel } from './TransformPanel.jsx';
 
-// Charts — visualisation primitives (subset; ScopePlayer / BpmBandChart
-// / PreviewChart still deferred until a consumer needs them).
+// Charts — visualisation primitives. Charts.jsx is fully carved out as
+// of v0.0.2 (the iter 08 source has no remaining unported components).
 export {
   BPM_TIERS,
   BehaviorTagBar,
   BpmBandChart,
   ChapterStrip,
   ChartTitleStrip,
+  DiffSparkline,
+  MiniWave,
+  PhraseDetailZoomChart,
   PhraseRibbon,
+  PreviewChart,
+  ScopePlayer,
   ScriptChart,
+  Sparkline,
   bpmTier,
   tagColor,
   tagLabel,

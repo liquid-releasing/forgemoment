@@ -15,7 +15,10 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 | **`MediaViewer`** | The master clock viewer. 3-mode thumbnail (Video / Audio / Funscript), transport, baton sync, `onTimeChange` signal that sibling subviews subscribe to. |
 | **`ChapterStrip`** | Click-to-scope chapter strip. Renders the chapter list as colored bands; clicking one returns its `chapter` record so the consumer can set the MediaViewer's `chapter` prop to scope into it. Pairs with the +Mark integration point to close the chapter-creation loop. (NEW — not in iter 08.) |
 | **`ScriptChart`** | Funscript curve over a viewport window. Phrase tag bands, edit-region highlight, click-to-seek, configurable BPM-tier tone. Use when the consumer wants to zoom / drill in. |
+| **`PreviewChart`** | Two stacked `ScriptChart`s — Original on top, transformed Preview below. The canonical "before / after" view; tints each row by its BPM tier so the higher-energy side reads at a glance. |
 | **`BpmBandChart`** | The "colored funscript" overview — full-script chart with phrase boundaries as full-height bands tinted by BPM tier (high=orange / mid=blue / low=grey), funscript curve over the top, top-right legend. Click-to-seek, optional playhead. Used in FFP Export, forgegen Output, and every cross-product preview. |
+| **`PhraseDetailZoomChart`** | Single-phrase close-up; every action drawn as a connected dot, tier-tinted background. Companion to `BpmBandChart` for drill-in views. |
+| **`ScopePlayer`** | Composite player widget — stylised video poster + scoped `ScriptChart` + transport row. Scope chip (script / chapter / phrase / pattern) in the corner. |
 | **`TopBar`** | Top strip of an lqr studio app — logo / file info / badge / scope slot / left + right action slots. Every FFP-specific bit is consumer-owned. |
 | **`TabStrip`** | Horizontal tabs with pipeline-ready states (green-dot when accepted, dimmed when upstream isn't). `tabs` / `utilityTabs` / `helpItems` props replace iter 08's hardcoded FF_TABS / FF_UTILITY_TABS / HelpMenu items. |
 | **`ScopePicker`** | Generic scope picker (replaces iter 08's chapter-specific ChapterScopePicker). Accepts a `scopes` array of `{id, title, color?, start?, end?}`. |
@@ -28,25 +31,19 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 | `ChartTitleStrip` | Small title-strip header (title · meta · meta · time). |
 | `BPM_TIERS`, `bpmTier` | BPM classification helpers (high / mid / low). |
 | `tagColor`, `tagLabel` | Phrase-tag color/label resolvers; take a `tags` catalog prop. |
+| `MiniWave` | Deterministic mini-waveform thumbnail (seed → shape). Card / list-row visual placeholders. |
+| `Sparkline` | Tiny funscript line for table rows / phrase lists. Optional fill. |
+| `DiffSparkline` | Original-vs-preview overlay sparkline — ghost dashed original under solid filled preview. Natural micro-counterpart to `PreviewChart`. |
 | `HoldSeekButton` | Press-and-hold rewind / fast-forward with 2→4→8→16× ramp every 600ms. |
 | `Button`, `Pill`, `Card`, `Field`, `TextInput`, `Slider`, `Segmented`, `SectionHeading`, `Icon` | Base UI primitives. |
 | `fmtTime`, `fmtTimeShort` | Time-formatting helpers. |
 
-### Deferred — port when a consumer needs them
-
-Other components from iter 08's [`Charts.jsx`](https://github.com/liquid-releasing/forge-ui-design/blob/main/iterations/08-redesign/design_files/Charts.jsx)
-not yet ported:
-
-`PreviewChart` (two stacked `ScriptChart`s, trivial when needed),
-`ScopePlayer`, `MiniWave`, `Sparkline`, `DiffSparkline`,
-`PhraseDetailZoomChart` (single-phrase close-up; companion to
-`BpmBandChart`).
-
-All six original carve-out targets from
+As of **v0.0.2** [iter 08's `Charts.jsx`](https://github.com/liquid-releasing/forge-ui-design/blob/main/iterations/08-redesign/design_files/Charts.jsx)
+is fully carved out — every visualisation component shipped. Combined
+with v0.0.1's primitives / MediaViewer / HoldSeekButton / AppShell /
+TransformPanel, every target in
 [REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md)
-(primitives, Charts subset, MediaViewer, HoldSeekButton, AppShell,
-TransformPanel) are now shipped. Only the deferred Charts heavies
-remain.
+now lives in this library.
 
 ## Master clock contract
 

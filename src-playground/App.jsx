@@ -49,7 +49,12 @@ export function App() {
   // Chapters created from the Viewer's +Chapter button land here so the
   // playground can prove the callback fires. Real consumers would push
   // into a sidecar / chapter list and re-render.
-  const [createdChapters, setCreatedChapters] = useState([]);
+  const [marks, setMarks] = useState([]);
+  // The +<markLabel> button is a generic integration point — the
+  // playground swaps the label to show that the SAME button can mean
+  // "create chapter" or "drop a beat" or "tag a note" depending on
+  // what the consuming app wires onMark to.
+  const [markLabel, setMarkLabel] = useState('Chapter');
 
   // Fake play loop: 24fps simulated playback. Demonstrates that the
   // Viewer's onTimeChange fires as the clock advances.
@@ -103,7 +108,8 @@ export function App() {
             onTimeChange={handleTimeChange}
             onPrev={() => setCurrentMs(Math.max(0, currentMs - 30_000))}
             onNext={() => setCurrentMs(Math.min(TRACK_DURATION_MS, currentMs + 30_000))}
-            onCreateChapter={() => setCreatedChapters((c) => [...c, { at_ms: currentMs }])}
+            onMark={(ms) => setMarks((m) => [...m, { kind: markLabel, at_ms: ms }])}
+            markLabel={markLabel}
             chapter={FAKE_CHAPTER}
             totalMs={TRACK_DURATION_MS}
             audioWaveform={FAKE_WAVEFORM}
@@ -113,7 +119,12 @@ export function App() {
           />
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
             <SiblingClockSubscriber observers={batonObservers} currentMs={currentMs} />
-            <CreatedChaptersCard chapters={createdChapters} onClear={() => setCreatedChapters([])} />
+            <MarksCard
+              marks={marks}
+              markLabel={markLabel}
+              onLabelChange={setMarkLabel}
+              onClear={() => setMarks([])}
+            />
             <Field label="Scrub (parent owns time; Viewer reflects)">
               <Slider
                 min={0}
@@ -176,17 +187,25 @@ export function App() {
   );
 }
 
-function CreatedChaptersCard({ chapters, onClear }) {
+function MarksCard({ marks, markLabel, onLabelChange, onClear }) {
+  // The +<markLabel> button on the Viewer is a generic integration
+  // point — the label here drives what the button says AND what the
+  // collected marks get tagged as. Same code path; different meaning
+  // per consumer. Switching the label mid-session shows the marks
+  // collected under multiple labels, which is the real cross-app
+  // story: one app might collect "Chapter" marks AND "Beat" marks
+  // simultaneously by toggling.
+  const LABEL_OPTIONS = ['Chapter', 'Beat', 'Note', 'Cue'];
   return (
     <Card padding={14}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        marginBottom: 6,
+        marginBottom: 8,
       }}>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1 }}>
-          Chapters created via Viewer&apos;s +Chapter
+          Marks via Viewer&apos;s +{markLabel}
         </div>
-        {chapters.length > 0 && (
+        {marks.length > 0 && (
           <button
             onClick={onClear}
             style={{
@@ -199,16 +218,21 @@ function CreatedChaptersCard({ chapters, onClear }) {
           </button>
         )}
       </div>
-      {chapters.length === 0
-        ? <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>none yet — tap ➕ Chapter on the Viewer</div>
+      <div style={{ marginBottom: 10 }}>
+        <Field label="What does +the-button mean right now?" hint="Swap to see one button take on different meanings.">
+          <Segmented options={LABEL_OPTIONS} value={markLabel} onChange={onLabelChange} />
+        </Field>
+      </div>
+      {marks.length === 0
+        ? <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>none yet — tap ➕ {markLabel} on the Viewer</div>
         : (
           <div className="mono" style={{ fontSize: 11, color: 'var(--text)', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {chapters.map((c, i) => (
+            {marks.map((m, i) => (
               <span key={i} style={{
                 padding: '2px 6px', borderRadius: 4,
                 background: 'var(--surface-2)', border: '1px solid var(--border)',
               }}>
-                #{i + 1} {fmtTime(c.at_ms)}
+                <span style={{ color: 'var(--text-muted)' }}>{m.kind}</span> {fmtTime(m.at_ms)}
               </span>
             ))}
           </div>

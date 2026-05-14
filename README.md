@@ -61,6 +61,30 @@ Use the `mode` prop (controlled) or `defaultMode` (uncontrolled) to
 pick between `'video'`, `'audio'`, `'funscript'`. `showModeToggle={false}`
 hides the chip strip if you want to pin a single mode.
 
+## The +mark integration point
+
+The `MediaViewer`'s `+<markLabel>` button is a **generic integration
+point** — same button code, different meaning per consumer. The
+component doesn't know whether you're creating a chapter, dropping a
+beat marker, or tagging a note; it just fires `onMark(currentMs)` and
+your app decides.
+
+```jsx
+// Create chapters
+<MediaViewer markLabel="Chapter" onMark={(ms) => createChapter(ms)} />
+
+// Drop beat markers
+<MediaViewer markLabel="Beat" onMark={(ms) => beats.push(ms)} />
+
+// Tag notes for a script reviewer
+<MediaViewer markLabel="Note" onMark={(ms) => openNoteEditor(ms)} />
+```
+
+Set `showMark={false}` to hide the button entirely when the consuming
+app doesn't need a marking action. Old callers passing
+`onCreateChapter` / `showCreateChapter` still work as back-compat
+aliases — drop them when you migrate.
+
 ## Data-pluggable visualizations
 
 Each mode renders a placeholder when its data prop is absent and a

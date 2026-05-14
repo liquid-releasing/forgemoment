@@ -39,8 +39,20 @@
 //                       manages its own mode state initialised to
 //                       `defaultMode`.
 //   defaultMode       same                                    default 'video'
+//   markLabel         string                                  default 'Chapter'
+//                       Label shown on the +<label> button. The button
+//                       is a generic integration point; consumers
+//                       co-opt it to mean whatever fits their app —
+//                       "Chapter", "Beat", "Cue", "Note", "Event", etc.
+//                       Just renames the button; the meaning is in the
+//                       onMark callback the consumer wires.
 //   nextTitle         string                                  optional
-//   onCreateChapter   () => void                              optional
+//   onMark            (ms) => void                            optional
+//                       Fires when the +<markLabel> button is pressed,
+//                       with the current playhead position in ms. The
+//                       consumer decides what to do with it (create a
+//                       chapter, drop a marker on a script, fire an
+//                       event, etc.).
 //   onModeChange      (mode) => void                          optional
 //                       Fires when the user toggles modes. If
 //                       `mode` is controlled, the parent must
@@ -53,7 +65,9 @@
 //                       Master clock signal. Fires whenever
 //                       currentMs changes. Subscribers follow.
 //   prevTitle         string                                  optional
-//   showCreateChapter boolean                                 default true
+//   showMark          boolean                                 default true
+//                       Hide the +<markLabel> button entirely if the
+//                       consuming app doesn't want a marking action.
 //   showModeToggle    boolean                                 default true
 //                       Hide the mode chip strip if the
 //                       consuming app pins to a single mode.
@@ -88,10 +102,11 @@ export function MediaViewer({
   funscript,
   height,
   isPlaying = false,
+  markLabel = 'Chapter',
   media = { kind: 'video', title: 'preview' },
   mode: modeProp,
   nextTitle = 'Next chapter',
-  onCreateChapter,
+  onMark,
   onModeChange,
   onNext,
   onPlayPause,
@@ -99,15 +114,25 @@ export function MediaViewer({
   onSeek,
   onTimeChange,
   prevTitle = 'Previous chapter',
-  showCreateChapter = true,
+  showMark = true,
   showModeToggle = true,
   totalMs,
   videoSrc,
   width = 240,
-  // back-compat aliases — older callers used onPrevChapter / onNextChapter
+  // Back-compat aliases. Older callers may pass onCreateChapter /
+  // showCreateChapter; we accept them transparently. Drop after the
+  // first consumer migration is complete (probably v0.1).
+  onCreateChapter,
+  showCreateChapter,
+  // Older callers also used onPrevChapter / onNextChapter for the
+  // chapter-nav buttons.
   onPrevChapter,
   onNextChapter,
 }) {
+  // Resolve back-compat aliases. onMark wins if both are set; otherwise
+  // fall back to the legacy name. Same for showMark / showCreateChapter.
+  const onMarkResolved = onMark ?? onCreateChapter;
+  const showMarkResolved = showCreateChapter ?? showMark;
   // Mode state — controlled when `mode` prop is supplied, uncontrolled
   // otherwise. Either way we expose `onModeChange` so a controlled
   // consumer can intercept and an uncontrolled consumer can observe.
@@ -261,13 +286,13 @@ export function MediaViewer({
         <TransportButton title={nextTitle} onClick={next}>⏭</TransportButton>
       </div>
 
-      {showCreateChapter && (
+      {showMarkResolved && (
         <div style={{
           padding: '0 8px 8px', display: 'flex', gap: 4, justifyContent: 'center',
         }}>
           <button
-            onClick={onCreateChapter}
-            title="Create chapter at playhead"
+            onClick={() => onMarkResolved?.(currentMs)}
+            title={`Mark ${markLabel.toLowerCase()} at playhead`}
             style={{
               padding: '0 8px', height: 22,
               background: 'var(--surface-2)',
@@ -278,7 +303,7 @@ export function MediaViewer({
               fontFamily: 'inherit',
             }}
           >
-            ➕ Chapter
+            ➕ {markLabel}
           </button>
         </div>
       )}

@@ -14,7 +14,8 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 |---|---|
 | **`MediaViewer`** | The master clock viewer. 3-mode thumbnail (Video / Audio / Funscript), transport, baton sync, `onTimeChange` signal that sibling subviews subscribe to. |
 | **`ChapterStrip`** | Click-to-scope chapter strip. Renders the chapter list as colored bands; clicking one returns its `chapter` record so the consumer can set the MediaViewer's `chapter` prop to scope into it. Pairs with the +Mark integration point to close the chapter-creation loop. (NEW — not in iter 08.) |
-| **`ScriptChart`** | Funscript curve over a viewport window. Phrase tag bands, edit-region highlight, click-to-seek, configurable BPM-tier tone. The canonical funscript display across the toolchain. |
+| **`ScriptChart`** | Funscript curve over a viewport window. Phrase tag bands, edit-region highlight, click-to-seek, configurable BPM-tier tone. Use when the consumer wants to zoom / drill in. |
+| **`BpmBandChart`** | The "colored funscript" overview — full-script chart with phrase boundaries as full-height bands tinted by BPM tier (high=orange / mid=blue / low=grey), funscript curve over the top, top-right legend. Click-to-seek, optional playhead. Used in FFP Export, forgegen Output, and every cross-product preview. |
 | **`TopBar`** | Top strip of an lqr studio app — logo / file info / badge / scope slot / left + right action slots. Every FFP-specific bit is consumer-owned. |
 | **`TabStrip`** | Horizontal tabs with pipeline-ready states (green-dot when accepted, dimmed when upstream isn't). `tabs` / `utilityTabs` / `helpItems` props replace iter 08's hardcoded FF_TABS / FF_UTILITY_TABS / HelpMenu items. |
 | **`ScopePicker`** | Generic scope picker (replaces iter 08's chapter-specific ChapterScopePicker). Accepts a `scopes` array of `{id, title, color?, start?, end?}`. |
@@ -37,8 +38,9 @@ Other components from iter 08's [`Charts.jsx`](https://github.com/liquid-releasi
 not yet ported:
 
 `PreviewChart` (two stacked `ScriptChart`s, trivial when needed),
-`ScopePlayer`, `MiniWave`, `Sparkline`, `DiffSparkline`, `BpmBandChart`,
-`PhraseDetailZoomChart`.
+`ScopePlayer`, `MiniWave`, `Sparkline`, `DiffSparkline`,
+`PhraseDetailZoomChart` (single-phrase close-up; companion to
+`BpmBandChart`).
 
 All six original carve-out targets from
 [REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md)

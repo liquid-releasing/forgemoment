@@ -9,6 +9,9 @@
 //   - ChapterStrip   (NEW) — chapter list as a click-to-scope strip;
 //                            closes the +mark → visible chapter loop
 //   - ScriptChart          — funscript curve over a window
+//   - BpmBandChart         — full-script colored funscript: phrase
+//                            bands by BPM tier + curve overlay. The
+//                            canonical "colored funscript" view.
 //   - ChartTitleStrip      — header strip (title · meta · meta · time)
 //   - BPM_TIERS, bpmTier   — small classification utility
 //   - tagColor, tagLabel   — phrase-tag → color/label, with `tags` prop
@@ -22,8 +25,8 @@
 //   - MiniWave             — small waveform thumbnail
 //   - Sparkline            — phrase-mini sparkline
 //   - DiffSparkline        — diff visualization
-//   - BpmBandChart         — full-script BPM bands + curve
-//   - PhraseDetailZoomChart — zoomed phrase view
+//   - PhraseDetailZoomChart — zoomed phrase close-up (companion to
+//                            BpmBandChart for drilled-in views)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fmtTimeShort } from './primitives.jsx';
@@ -533,6 +536,231 @@ export function ChapterStrip({
           />
         )}
       </svg>
+    </div>
+  );
+}
+
+// ─── BpmBandChart ──────────────────────────────────────────────────
+//
+// The "colored funscript" view used across the lqr toolchain: forgegen
+// Output, FFP Export, every per-phrase mini-preview, beatflo's
+// composition overview. Full-script overview where phrase boundaries
+// become full-height bands tinted by BPM tier (high=orange, mid=blue,
+// low=grey) and the funscript curve runs in accent over the top.
+//
+// What distinguishes this from `ScriptChart`:
+//   - ScriptChart is a viewport into a (start, end) window — for editing
+//     and inspection. Bands are thin phrase-tag chips at the top.
+//   - BpmBandChart is the full-track overview. Bands are full-height
+//     BPM-tier color washes. No phrase tags; phrases are identified by
+//     their tier color and numbered along the top edge. Legend overlay
+//     in the top-right corner names the tiers.
+//
+// Props:
+//   actions       [{ at, pos }] — every action across the full track
+//   phrases       [{ id, start, end, bpm }] — phrase records carrying
+//                 their BPM (so the chart can classify each into a tier)
+//   totalMs       full track duration
+//   title         text shown left in the ChartTitleStrip header
+//   bpmAvg        precomputed average BPM (optional — falls back to
+//                 mean of phrase BPMs)
+//   currentMs     playhead position (optional)
+//   onSeek(ms)    click-to-seek handler (optional)
+//   height        px, default 240
+//
+// Action down-sampling: when actions.length > 1500 the curve falls
+// back to ~1200 evenly-strided points. Visually identical for the
+// overview scale; keeps the SVG path under a few kB even on
+// multi-hour funscripts.
+export function BpmBandChart({
+  actions, phrases, totalMs, title = 'script',
+  bpmAvg, currentMs, onSeek, height = 240,
+}) {
+  const wrapRef = useRef();
+  const [width, setWidth] = useState(900);
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const padTop = 18, padBottom = 24, padLeft = 38, padRight = 14;
+  const plotH = height - padTop - padBottom;
+  const plotW = Math.max(0, width - padLeft - padRight);
+
+  const xFor = (ms) => padLeft + (ms / totalMs) * plotW;
+  const yFor = (pos) => padTop + (1 - pos / 100) * plotH;
+  const msFromX = (x) => ((x - padLeft) / plotW) * totalMs;
+
+  const ticks = useMemo(() => {
+    const niceSteps = [15000, 30000, 60000, 120000, 300000, 600000];
+    const step = niceSteps.find((s) => totalMs / s < 14) ?? 600000;
+    const out = [];
+    for (let t = 0; t <= totalMs; t += step) out.push(t);
+    return out;
+  }, [totalMs]);
+
+  // Down-sample for performance on long scripts. The path is the
+  // dominant render cost; phrases + ticks are fixed-count.
+  const sampled = useMemo(() => {
+    if (actions.length < 1500) return actions;
+    const target = 1200;
+    const stride = Math.ceil(actions.length / target);
+    return actions.filter((_, i) => i % stride === 0);
+  }, [actions]);
+
+  const pathD = sampled.length === 0 ? '' : sampled.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'} ${xFor(p.at).toFixed(1)} ${yFor(p.pos).toFixed(1)}`,
+  ).join(' ');
+
+  const handleClick = (e) => {
+    if (!onSeek) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    onSeek(msFromX(e.clientX - rect.left));
+  };
+
+  const phraseAvg = phrases.length > 0
+    ? Math.round(phrases.reduce((s, p) => s + p.bpm, 0) / phrases.length)
+    : 0;
+  const meta = [
+    `${phrases.length} phrases`,
+    `${bpmAvg ?? phraseAvg} BPM avg`,
+    fmtTimeShort(totalMs),
+  ];
+
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 10, overflow: 'hidden',
+    }}>
+      <ChartTitleStrip title={title} meta={meta} />
+      <div ref={wrapRef} style={{ position: 'relative', background: 'var(--bg)' }}>
+        <svg
+          width={width} height={height} onClick={handleClick}
+          style={{ display: 'block', cursor: onSeek ? 'pointer' : 'default' }}
+        >
+          {/* phrase BPM bands — full-height behind the curve */}
+          {phrases.map((ph) => {
+            const tier = bpmTier(ph.bpm);
+            const x = xFor(ph.start);
+            const w = Math.max(1, xFor(ph.end) - x);
+            return (
+              <g key={ph.id}>
+                <rect x={x} y={padTop} width={w} height={plotH} fill={tier.fill} />
+                <line
+                  x1={x} x2={x} y1={padTop} y2={padTop + plotH}
+                  stroke={tier.stroke} strokeWidth={1}
+                />
+              </g>
+            );
+          })}
+
+          {/* y-axis grid + labels (0/25/50/75/100; mid line solid) */}
+          {[0, 25, 50, 75, 100].map((p) => (
+            <g key={p}>
+              <line
+                x1={padLeft} x2={width - padRight} y1={yFor(p)} y2={yFor(p)}
+                stroke="var(--border)"
+                strokeOpacity={p === 50 ? 0.55 : 0.22}
+                strokeDasharray={p === 50 ? '' : '2 4'}
+              />
+              <text
+                x={padLeft - 6} y={yFor(p) + 3} textAnchor="end"
+                fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)"
+              >
+                {p}
+              </text>
+            </g>
+          ))}
+          <text
+            x={6} y={padTop + plotH / 2} textAnchor="middle"
+            fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)"
+            transform={`rotate(-90 12 ${padTop + plotH / 2})`}
+          >
+            Position (0–100)
+          </text>
+
+          {/* x-axis time ticks */}
+          {ticks.map((t) => (
+            <g key={t}>
+              <line
+                x1={xFor(t)} x2={xFor(t)} y1={padTop + plotH}
+                y2={padTop + plotH + 3}
+                stroke="var(--border)" strokeOpacity={0.5}
+              />
+              <text
+                x={xFor(t)} y={height - 8} textAnchor="middle"
+                fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)"
+              >
+                {fmtTimeShort(t)}
+              </text>
+            </g>
+          ))}
+          <text
+            x={padLeft + plotW / 2} y={height - 1} textAnchor="middle"
+            fontSize={9} fontFamily="var(--font-mono)" fill="var(--text-dim)"
+          >
+            Time
+          </text>
+
+          {/* phrase numbers riding top edge — skip very narrow bands */}
+          {phrases.map((ph, i) => {
+            const tier = bpmTier(ph.bpm);
+            const x = xFor(ph.start);
+            const w = Math.max(1, xFor(ph.end) - x);
+            if (w < 6) return null;
+            return (
+              <text
+                key={ph.id}
+                x={x + Math.min(w / 2, 10)} y={padTop - 5}
+                fontSize={9} fontFamily="var(--font-mono)"
+                fill={tier.dot} textAnchor="start"
+                style={{ pointerEvents: 'none' }}
+              >
+                {i + 1}
+              </text>
+            );
+          })}
+
+          {/* funscript curve — accent blue over the colored bands */}
+          {pathD && (
+            <path
+              d={pathD} fill="none" stroke="#4dabf7" strokeWidth={1}
+              strokeLinejoin="round" strokeLinecap="round" strokeOpacity={0.95}
+            />
+          )}
+
+          {/* playhead */}
+          {currentMs != null && currentMs >= 0 && currentMs <= totalMs && (
+            <line
+              x1={xFor(currentMs)} x2={xFor(currentMs)}
+              y1={padTop} y2={padTop + plotH}
+              stroke="#fff" strokeWidth={1} strokeOpacity={0.85}
+            />
+          )}
+        </svg>
+
+        {/* legend overlay — top right corner names the BPM tiers so
+            the colored bands are self-explanatory at a glance. */}
+        <div style={{
+          position: 'absolute', top: 10, right: 16,
+          display: 'flex', flexDirection: 'column', gap: 4,
+          background: 'rgba(15,17,21,0.88)', border: '1px solid var(--border)',
+          borderRadius: 4, padding: '6px 10px',
+          fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)',
+        }}>
+          {BPM_TIERS.map((t) => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{
+                width: 12, height: 8, background: t.fill,
+                border: `1px solid ${t.stroke}`,
+              }} />
+              {t.label}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

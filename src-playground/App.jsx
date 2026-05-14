@@ -17,10 +17,10 @@
 
 import { useEffect, useState } from 'react';
 import {
-  AcceptBar, Button, Card, ChapterStrip, Field, HoldSeekButton,
-  MediaViewer, Pill, ScopePicker, ScriptChart, SectionLabel, Segmented,
-  Slider, StatusBar, TabBody, TabHeader, TabStrip, TextInput, TopBar,
-  TransformPanel, fmtTime,
+  AcceptBar, BpmBandChart, Button, Card, ChapterStrip, Field,
+  HoldSeekButton, MediaViewer, Pill, ScopePicker, ScriptChart,
+  SectionLabel, Segmented, Slider, StatusBar, TabBody, TabHeader,
+  TabStrip, TextInput, TopBar, TransformPanel, fmtTime,
 } from 'forgemoment';
 
 const TRACK_DURATION_MS = 300_000; // 5 minutes
@@ -51,10 +51,10 @@ const FAKE_TAGS = [
   { id: 'recover', label: 'recover', color: '#3ed598' },
 ];
 const FAKE_PHRASES = [
-  { id: 'p-1', start:       0, end:  60_000, tag: 'tease'   },
-  { id: 'p-2', start:  60_000, end: 180_000, tag: 'build'   },
-  { id: 'p-3', start: 180_000, end: 260_000, tag: 'climax'  },
-  { id: 'p-4', start: 260_000, end: 300_000, tag: 'recover' },
+  { id: 'p-1', start:       0, end:  60_000, tag: 'tease',   bpm:  48 },
+  { id: 'p-2', start:  60_000, end: 180_000, tag: 'build',   bpm:  82 },
+  { id: 'p-3', start: 180_000, end: 260_000, tag: 'climax',  bpm: 134 },
+  { id: 'p-4', start: 260_000, end: 300_000, tag: 'recover', bpm:  72 },
 ];
 
 const TABS = [
@@ -459,6 +459,30 @@ function CurveTab({
         onSelectPhrase={setSelectedPhraseId}
         height={260}
       />
+
+      {/* BpmBandChart — the "colored funscript" overview. Phrase
+          boundaries become full-height bands tinted by BPM tier
+          (high/mid/low). Same data as the ScriptChart above; different
+          visualization. The canonical Export-tab preview across FFP /
+          forgegen / beatflo. */}
+      <div style={{ marginTop: 22 }}>
+        <SectionLabel right={
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'none' }}>
+            Click to seek · playhead syncs with the rest of the app
+          </span>
+        }>
+          BpmBandChart — colored funscript overview
+        </SectionLabel>
+        <BpmBandChart
+          actions={FAKE_FUNSCRIPT.actions}
+          phrases={FAKE_PHRASES}
+          totalMs={TRACK_DURATION_MS}
+          title="demo-track.funscript"
+          currentMs={currentMs}
+          onSeek={setCurrentMs}
+          height={240}
+        />
+      </div>
     </>
   );
 }

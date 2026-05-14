@@ -46,6 +46,7 @@ export { TransformPanel } from './TransformPanel.jsx';
 export {
   BPM_TIERS,
   BehaviorTagBar,
+  BpmBandChart,
   ChapterStrip,
   ChartTitleStrip,
   PhraseRibbon,

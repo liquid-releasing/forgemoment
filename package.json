@@ -10,12 +10,15 @@
       "import": "./dist/forgemoment.es.js",
       "require": "./dist/forgemoment.cjs.js"
     },
-    "./styles": "./dist/forgemoment.css"
+    "./styles": "./src/tokens.css"
   },
   "files": [
     "dist",
     "src",
     "README.md"
+  ],
+  "sideEffects": [
+    "**/*.css"
   ],
   "scripts": {
     "dev": "vite",

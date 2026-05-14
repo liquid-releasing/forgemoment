@@ -210,13 +210,28 @@ In rough priority order:
 3. **Real `<video>` playback in MediaViewer.** Currently a
    stylised film-strip poster.
 4. **Real audio waveform rendering.** WebAudio decode + peaks.
-5. **TypeScript types.** No `.d.ts` yet. Consumers get IntelliSense
-   from the JSDoc-ish comments but not real type checking.
-6. **Test suite.** None right now. Charts can be snapshot-tested;
-   MediaViewer needs behavior tests (the dogfood findings —
-   out-of-scope baton, frame-jog pause — should each have a
-   regression test).
-7. **npm publish.** Currently linked via git / workspace.
+
+### Deferred until ≥1 consumer carves in
+
+These are the "make it a proper reusable library" tasks. They're
+deliberately deferred until a real consumer has stress-tested the
+API — doing them sooner would mean redoing the work if the
+carve-in surfaces API churn.
+
+- **npm publish.** Today consumers install via
+  `github:liquid-releasing/forgemoment#vX.Y.Z` which is fragile
+  in CI. One `npm publish` fixes this, but only do it once the
+  semver promise is real.
+- **TypeScript types.** Either handwritten `.d.ts` files (lighter,
+  decoupled from source) or convert source to `.tsx` and emit
+  types from `tsc` (more invasive but a single source of truth).
+- **CHANGELOG.md.** Today the change history lives in commit
+  messages.
+- **GitHub Actions CI.** `npm run build` on PR at minimum.
+- **package.json polish.** `keywords` / `bugs` / `homepage` fields.
+- **Test suite.** Charts can be snapshot-tested; MediaViewer needs
+  behavior tests (the dogfood findings — out-of-scope baton,
+  frame-jog pause — should each have a regression test).
 
 ## What NOT to do
 

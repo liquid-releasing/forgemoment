@@ -1,6 +1,6 @@
 {
   "name": "forgemoment",
-  "version": "0.0.2",
+  "version": "0.0.3-mvp",
   "description": "Shared React component library for the lqr studio family — primitives, charts/timeline, MediaViewer (master clock), HoldSeekButton, TransformPanel, AppShell.",
   "type": "module",
   "main": "./dist/forgemoment.cjs.js",

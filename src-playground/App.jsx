@@ -321,7 +321,7 @@ export function App() {
         synced
         scope={scopedChapter ? scopedChapter.name : 'all chapters'}
         chainFile="viewer.chain.json"
-        version="forgemoment v0.0.2 · playground"
+        version="forgemoment v0.0.3-mvp · playground"
       />
     </div>
   );

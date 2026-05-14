@@ -132,6 +132,7 @@ export function App() {
             currentMs={currentMs}
             selectedId={scopedChapterId}
             onSelect={(ch) => setScopedChapterId(ch.id)}
+            onSeek={setCurrentMs}
           />
         </div>
         <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>

@@ -161,9 +161,24 @@ export function MediaViewer({
     ? { start: chapter.start, end: chapter.end }
     : { start: 0, end: totalMs ?? 1 };
   const batonDur = Math.max(1, batonRange.end - batonRange.start);
-  const batonPos = Math.min(1, Math.max(0, (currentMs - batonRange.start) / batonDur));
+  const rawBatonPos = (currentMs - batonRange.start) / batonDur;
+  const batonPos = Math.min(1, Math.max(0, rawBatonPos));
+  // Out-of-scope: playhead is outside the chapter range. We still draw
+  // the baton (clamped to the edge) but faded and with a direction
+  // arrow at the matching edge, so the user reads "playhead is past
+  // the chapter end →" instead of "the baton broke." This was a real
+  // dogfood confusion 2026-05-14.
+  const outOfScope = chapter && (rawBatonPos < 0 || rawBatonPos > 1);
+  const outDirection = rawBatonPos > 1 ? 'after' : rawBatonPos < 0 ? 'before' : null;
 
   const stepFrame = (dir) => {
+    // Frame jog is for precise inspection — pause first if playing so
+    // the playhead doesn't blow past the new position on the next
+    // frame. Back-5s and chapter-nav stay playing (matches YouTube /
+    // generic player conventions). Fix triggered by user observation
+    // 2026-05-14: "frame-forward looked broken because playback
+    // continued past the new position."
+    if (isPlaying) onPlayPause?.();
     // ~30 fps step (33ms). Frame jog is consumer-tunable via onSeek.
     onSeek?.((currentMs || 0) + dir * 33);
   };
@@ -215,15 +230,43 @@ export function MediaViewer({
             : <FunscriptPlaceholder />
         )}
 
-        {/* Baton — the playhead. Same look across modes. */}
+        {/* Baton — the playhead. Same look across modes.
+            `transform: translateX(-50%)` centers the 1.5px line on
+            its position so the baton stays visible at both edges
+            (without this, batonPos=1 puts the line's left edge at
+            the container's right edge and the whole 1.5px gets
+            clipped by overflow:hidden — looked like "disappeared").
+            When out of scope (playhead past chapter.end or before
+            chapter.start), draw faded so the user reads "playhead is
+            outside this chapter" not "the baton broke". The arrow
+            chip below makes the direction explicit. */}
         <div style={{
           position: 'absolute', top: 0, bottom: 0,
           left: `${batonPos * 100}%`,
           width: 1.5,
-          background: 'rgba(255,255,255,0.85)',
-          boxShadow: '0 0 6px rgba(255,255,255,0.45)',
+          transform: 'translateX(-50%)',
+          background: outOfScope ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.85)',
+          boxShadow: outOfScope ? 'none' : '0 0 6px rgba(255,255,255,0.45)',
           pointerEvents: 'none',
         }} />
+        {outOfScope && (
+          <div style={{
+            position: 'absolute',
+            top: 6,
+            ...(outDirection === 'after'
+              ? { right: 4 }
+              : { left: 4 }),
+            padding: '2px 6px',
+            borderRadius: 4,
+            background: 'rgba(0,0,0,0.55)',
+            color: 'rgba(255,255,255,0.85)',
+            fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            pointerEvents: 'none',
+          }}>
+            {outDirection === 'after' ? 'past end →' : '← before start'}
+          </div>
+        )}
 
         {/* Corner mode label — redundant with the toggle but useful
             when the toggle is hidden via showModeToggle=false. */}

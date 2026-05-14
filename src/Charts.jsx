@@ -188,7 +188,7 @@ const CHAPTER_PALETTE = [
 
 export function ChapterStrip({
   chapters, totalMs, currentMs,
-  selectedId, onSelect,
+  selectedId, onSelect, onSeek,
   height = 28,
 }) {
   const wrapRef = useRef();
@@ -248,8 +248,15 @@ export function ChapterStrip({
                 fill={ch.color}
                 fillOpacity={sel ? 0.95 : 0.55}
                 stroke={sel ? '#fff' : 'transparent'} strokeWidth={1}
-                onClick={() => onSelect?.(ch)}
-                style={{ cursor: onSelect ? 'pointer' : 'default' }}
+                onClick={() => {
+                  // Both gestures fire on the same click — "I clicked
+                  // this chapter, take me there" is the natural mental
+                  // model. Consumers wire seek to setCurrentMs and
+                  // select to setScopedChapterId.
+                  onSelect?.(ch);
+                  onSeek?.(ch.at_ms);
+                }}
+                style={{ cursor: (onSelect || onSeek) ? 'pointer' : 'default' }}
               />
               {ch.name && w > 40 && (
                 <text

@@ -14,6 +14,7 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 |---|---|
 | **`MediaViewer`** | The master clock viewer. 3-mode thumbnail (Video / Audio / Funscript), transport, baton sync, `onTimeChange` signal that sibling subviews subscribe to. |
 | **`ChapterStrip`** | Click-to-scope chapter strip. Renders the chapter list as colored bands; clicking one returns its `chapter` record so the consumer can set the MediaViewer's `chapter` prop to scope into it. Pairs with the +Mark integration point to close the chapter-creation loop. (NEW — not in iter 08.) |
+| **`ScriptChart`** | Funscript curve over a viewport window. Phrase tag bands, edit-region highlight, click-to-seek, configurable BPM-tier tone. The canonical funscript display across the toolchain. |
 | `PhraseRibbon` | Horizontal phrase strip with click-to-select. `tags` prop replaces iter 08's `window.FF_TAGS` global. |
 | `BehaviorTagBar` | Stacked % bar showing time distribution across behavior tags. |
 | `ChartTitleStrip` | Small title-strip header (title · meta · meta · time). |
@@ -28,8 +29,9 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 Other components from iter 08's [`Charts.jsx`](https://github.com/liquid-releasing/forge-ui-design/blob/main/iterations/08-redesign/design_files/Charts.jsx)
 not yet ported:
 
-`ScriptChart`, `PreviewChart`, `ScopePlayer`, `MiniWave`, `Sparkline`,
-`DiffSparkline`, `BpmBandChart`, `PhraseDetailZoomChart`.
+`PreviewChart` (two stacked `ScriptChart`s, trivial when needed),
+`ScopePlayer`, `MiniWave`, `Sparkline`, `DiffSparkline`, `BpmBandChart`,
+`PhraseDetailZoomChart`.
 
 Other files from [REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md)
 not yet started:

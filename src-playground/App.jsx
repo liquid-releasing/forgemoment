@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import {
   Button, Card, ChapterStrip, Field, HoldSeekButton, MediaViewer, Pill,
-  SectionHeading, Segmented, Slider, TextInput, fmtTime,
+  ScriptChart, SectionHeading, Segmented, Slider, TextInput, fmtTime,
 } from 'forgemoment';
 
 const TRACK_DURATION_MS = 300_000; // 5 minutes
@@ -37,6 +37,20 @@ const FAKE_FUNSCRIPT = {
     pos: Math.round(50 + Math.sin(i * 0.5) * 35 + (i % 7) * 2),
   })),
 };
+// Phrase bands the ScriptChart will draw on top of the funscript curve.
+// Each maps to a chapter range; tags map to the FAKE_TAGS catalog below.
+const FAKE_TAGS = [
+  { id: 'tease',   label: 'tease',   color: '#4dabf7' },
+  { id: 'build',   label: 'build',   color: '#ffb547' },
+  { id: 'climax',  label: 'climax',  color: '#ff7b7b' },
+  { id: 'recover', label: 'recover', color: '#3ed598' },
+];
+const FAKE_PHRASES = [
+  { id: 'p-1', start:       0, end:  60_000, tag: 'tease'   },
+  { id: 'p-2', start:  60_000, end: 180_000, tag: 'build'   },
+  { id: 'p-3', start: 180_000, end: 260_000, tag: 'climax'  },
+  { id: 'p-4', start: 260_000, end: 300_000, tag: 'recover' },
+];
 
 export function App() {
   // The master clock — owned by the parent here so we can demonstrate
@@ -62,6 +76,11 @@ export function App() {
   // scopes to that chapter's slice.
   const [chapters, setChapters] = useState(INITIAL_CHAPTERS);
   const [scopedChapterId, setScopedChapterId] = useState(INITIAL_CHAPTERS[1].id);
+  // ScriptChart viewport: 'chapter' follows the scoped chapter; 'track'
+  // shows the entire track. Toggling proves the chart re-windows in
+  // place without remounting (no scrub-position lost, etc.).
+  const [scriptViewport, setScriptViewport] = useState('chapter');
+  const [selectedPhraseId, setSelectedPhraseId] = useState(null);
   const scopedChapter = chapters.find((c) => c.id === scopedChapterId) || null;
   // MediaViewer's existing `chapter` prop wants {id, title, color, start, end}
   // — map our richer chapter shape into that.
@@ -201,6 +220,47 @@ export function App() {
             </div>
           </div>
         </div>
+      </Card>
+
+      {/* ScriptChart — funscript curve with phrase tag bands.
+          Demonstrates two viewport modes: scoped to the current
+          chapter, or full-track. Clicking on the chart seeks the
+          playhead (same setCurrentMs all the other controls use). */}
+      <Card padding={20}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+          marginBottom: 14, gap: 16,
+        }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>ScriptChart</h3>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+              Funscript curve with phrase tag bands. Click to seek; click a phrase band to select it.
+            </div>
+          </div>
+          <Field label="Viewport">
+            <Segmented
+              options={[
+                { value: 'chapter', label: 'Scoped chapter' },
+                { value: 'track',   label: 'Full track' },
+              ]}
+              value={scriptViewport}
+              onChange={setScriptViewport}
+            />
+          </Field>
+        </div>
+        <ScriptChart
+          actions={FAKE_FUNSCRIPT.actions}
+          phrases={FAKE_PHRASES}
+          tags={FAKE_TAGS}
+          totalMs={TRACK_DURATION_MS}
+          startMs={scriptViewport === 'chapter' && scopedChapter ? scopedChapter.at_ms : 0}
+          endMs={scriptViewport === 'chapter' && scopedChapter ? scopedChapter.end_ms : TRACK_DURATION_MS}
+          currentMs={currentMs}
+          onSeek={setCurrentMs}
+          selectedPhraseId={selectedPhraseId}
+          onSelectPhrase={setSelectedPhraseId}
+          height={200}
+        />
       </Card>
 
       {/* Primitives gallery */}

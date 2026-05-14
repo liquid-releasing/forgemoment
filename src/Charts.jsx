@@ -8,6 +8,7 @@
 //   - BehaviorTagBar       — stacked %-bar by behavior tag
 //   - ChapterStrip   (NEW) — chapter list as a click-to-scope strip;
 //                            closes the +mark → visible chapter loop
+//   - ScriptChart          — funscript curve over a window
 //   - ChartTitleStrip      — header strip (title · meta · meta · time)
 //   - BPM_TIERS, bpmTier   — small classification utility
 //   - tagColor, tagLabel   — phrase-tag → color/label, with `tags` prop
@@ -15,8 +16,8 @@
 //                            in the iter 08 Babel build).
 //
 // Deferred to a future version (port when consumers actually need them):
-//   - ScriptChart          — funscript curve over a window
-//   - PreviewChart         — original-vs-preview overlay
+//   - PreviewChart         — original-vs-preview overlay (depends on
+//                            ScriptChart, which is now ported)
 //   - ScopePlayer          — composite player widget
 //   - MiniWave             — small waveform thumbnail
 //   - Sparkline            — phrase-mini sparkline
@@ -25,6 +26,7 @@
 //   - PhraseDetailZoomChart — zoomed phrase view
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { fmtTimeShort } from './primitives.jsx';
 
 // ─── BPM tiers ──────────────────────────────────────────────────────
 //
@@ -159,6 +161,258 @@ export function BehaviorTagBar({ phrases, totalMs, height = 14, tags = [] }) {
           style={{ width: `${b.pct}%`, background: b.color }}
         />
       ))}
+    </div>
+  );
+}
+
+// ─── ScriptChart ───────────────────────────────────────────────────
+//
+// Funscript curve over a viewport window. Phrases drawn as faint colored
+// bands on top. Optional edit-region highlight dims the surrounding
+// area to focus the eye on the active range. Click anywhere on the
+// canvas to seek (when onSeek is wired). The playhead renders as a
+// vertical line + downward-pointing pip from the top.
+//
+// Tone is configurable so the curve can echo the BPM tier of whatever
+// phrase the consumer is highlighting (pass `tone={bpmTier(bpm)}` style
+// `{fill, stroke, dot}`). Defaults to the lqr studio accent red.
+//
+// Props:
+//   actions          [{at: ms, pos: 0-100}]
+//   phrases          [{id, start, end, tag?}] (optional)
+//   tags             [{id, label, color}] (optional — tag catalog
+//                    for the phrase bands; replaces iter 08's
+//                    window.FF_TAGS global lookup)
+//   totalMs          number — full track duration; required when
+//                    endMs is not supplied
+//   startMs / endMs  viewport range; defaults to the full track
+//   currentMs        playhead position
+//   onSeek(ms)       click handler
+//   onSelectPhrase(id) phrase-band click handler
+//   selectedPhraseId currently highlighted phrase
+//   showPhraseTags   bool, default true
+//   showActions      'auto' | 'always' | 'never'
+//                    auto: render action dots when zoomed in
+//                    enough that they're meaningful
+//   tone             { fill, stroke, dot } override
+//   highlight        { start, end } — full-height tinted band marking
+//                    the active edit region; surrounding area dims
+//   height           px, default 180
+export function ScriptChart({
+  actions, phrases = [], tags = [], totalMs,
+  startMs = 0, endMs,
+  currentMs, onSeek,
+  height = 180, showPhraseTags = true, selectedPhraseId, onSelectPhrase,
+  showActions = 'auto',
+  tone,
+  highlight,
+}) {
+  const _tone = tone || { fill: '#ff4b4b', stroke: '#ff7b7b', dot: '#ff4b4b' };
+  const wrapRef = useRef();
+  const [width, setWidth] = useState(900);
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const vpStart = startMs;
+  const vpEnd = endMs ?? totalMs;
+  const vpDur = Math.max(1, vpEnd - vpStart);
+  const padTop = showPhraseTags ? 22 : 6;
+  const padBottom = 18;
+  const plotH = height - padTop - padBottom;
+
+  const xFor = (ms) => ((ms - vpStart) / vpDur) * width;
+  const yFor = (pos) => padTop + (1 - pos / 100) * plotH;
+  const msFromX = (x) => vpStart + (x / width) * vpDur;
+
+  // Actions visible in the viewport, with one extra point on each
+  // side so the curve's first/last segment renders across the edge.
+  const visible = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < actions.length; i++) {
+      const a = actions[i];
+      if (a.at < vpStart - 50) {
+        if (i + 1 < actions.length && actions[i + 1].at >= vpStart - 50) out.push(a);
+        continue;
+      }
+      if (a.at > vpEnd + 50) { out.push(a); break; }
+      out.push(a);
+    }
+    return out;
+  }, [actions, vpStart, vpEnd]);
+
+  const pathD = visible.length === 0 ? '' : visible.map((p, i) =>
+    `${i === 0 ? 'M' : 'L'} ${xFor(p.at).toFixed(1)} ${yFor(p.pos).toFixed(1)}`,
+  ).join(' ');
+  // Fill path closes the curve down to the bottom-left and back so
+  // the gradient fills the area below the curve.
+  const fillD = visible.length === 0 ? '' :
+    `${pathD} L ${xFor(visible[visible.length - 1].at).toFixed(1)} ${(padTop + plotH).toFixed(1)} L ${xFor(visible[0].at).toFixed(1)} ${(padTop + plotH).toFixed(1)} Z`;
+
+  // Time ticks at nice intervals — picks the largest step that
+  // produces ≤12 ticks across the viewport so the axis doesn't
+  // turn into an unreadable line of stamps.
+  const ticks = useMemo(() => {
+    const niceSteps = [1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000];
+    const step = niceSteps.find((s) => vpDur / s < 12) ?? 600000;
+    const first = Math.ceil(vpStart / step) * step;
+    const out = [];
+    for (let t = first; t <= vpEnd; t += step) out.push(t);
+    return out;
+  }, [vpStart, vpEnd, vpDur]);
+
+  // Action dots are only useful when the viewport is short enough
+  // and the action count is small enough that each dot is a
+  // distinct pixel; otherwise they smear into the curve.
+  const drawPts = showActions === 'always'
+    ? true
+    : showActions === 'never' ? false : vpDur < 60000 && visible.length < 200;
+
+  const handleClick = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    onSeek?.(msFromX(e.clientX - rect.left));
+  };
+
+  // SVG <linearGradient> needs a unique id; we derive it from the
+  // fill color so a page rendering multiple ScriptCharts with
+  // different tones doesn't end up sharing one gradient definition.
+  const gradId = `ffFill_${_tone.fill.replace(/[^a-z0-9]/gi, '')}`;
+
+  return (
+    <div ref={wrapRef} style={{
+      width: '100%', height,
+      background: 'var(--bg)',
+      border: '1px solid var(--border)',
+      borderRadius: 6, overflow: 'hidden',
+    }}>
+      <svg
+        width={width} height={height}
+        onClick={handleClick}
+        style={{ cursor: onSeek ? 'pointer' : 'default', display: 'block' }}
+      >
+        <defs>
+          <linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%"   stopColor={_tone.fill} stopOpacity="0.42" />
+            <stop offset="100%" stopColor={_tone.fill} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+
+        {/* edit-region highlight: dim wash on either side, dashed
+            frame around the active band. Drawn behind the curve so
+            the action line stays readable. */}
+        {highlight && highlight.end > vpStart && highlight.start < vpEnd && (() => {
+          const hx = Math.max(0, xFor(Math.max(vpStart, highlight.start)));
+          const hw = Math.max(2, xFor(Math.min(vpEnd, highlight.end)) - hx);
+          return (
+            <g>
+              {hx > 0 && (
+                <rect x={0} y={padTop} width={hx} height={plotH}
+                      fill="#000" fillOpacity={0.45} />
+              )}
+              {hx + hw < width && (
+                <rect x={hx + hw} y={padTop} width={width - hx - hw} height={plotH}
+                      fill="#000" fillOpacity={0.45} />
+              )}
+              <rect x={hx} y={padTop} width={hw} height={plotH}
+                    fill="none" stroke="#fff" strokeOpacity={0.5}
+                    strokeWidth={1} strokeDasharray="3 3" />
+            </g>
+          );
+        })()}
+
+        {/* horizontal position grid (0/25/50/75/100). Mid-line at 50
+            is solid; the others are dashed. */}
+        {[0, 25, 50, 75, 100].map((p) => (
+          <line key={p}
+            x1={0} x2={width} y1={yFor(p)} y2={yFor(p)}
+            stroke="var(--border)"
+            strokeOpacity={p === 50 ? 0.6 : 0.25}
+            strokeDasharray={p === 50 ? '' : '2 4'}
+          />
+        ))}
+
+        {/* phrase tag bands across the top */}
+        {showPhraseTags && phrases.map((ph) => {
+          if (ph.end < vpStart || ph.start > vpEnd) return null;
+          const x = Math.max(0, xFor(ph.start));
+          const w = Math.min(width, xFor(ph.end)) - x;
+          const sel = ph.id === selectedPhraseId;
+          const color = tagColor(ph.tag, tags);
+          return (
+            <g key={ph.id}
+              onClick={(e) => { e.stopPropagation(); onSelectPhrase?.(ph.id); }}
+              style={{ cursor: 'pointer' }}
+            >
+              <rect
+                x={x} y={0} width={Math.max(2, w - 1)} height={padTop - 4}
+                fill={color}
+                fillOpacity={sel ? 0.85 : ph.tag ? 0.55 : 0.30}
+                stroke={sel ? '#fff' : 'transparent'} strokeWidth={1}
+                rx={2}
+              />
+              {ph.tag && w > 32 && (
+                <text
+                  x={x + 4} y={padTop - 8} fontSize={9} fontWeight={700}
+                  fill="#0e1117" style={{ pointerEvents: 'none' }}
+                  clipPath={`inset(0 ${Math.max(0, width - x - w + 4)}px 0 ${x + 2}px)`}
+                >
+                  {tagLabel(ph.tag, tags)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* time ticks along the bottom */}
+        {ticks.map((t) => (
+          <g key={t}>
+            <line
+              x1={xFor(t)} x2={xFor(t)} y1={padTop} y2={padTop + plotH}
+              stroke="var(--border)" strokeOpacity={0.2}
+            />
+            <text
+              x={xFor(t) + 3} y={height - 5} fontSize={9}
+              fontFamily="var(--font-mono)" fill="var(--text-dim)"
+            >
+              {fmtTimeShort(t)}
+            </text>
+          </g>
+        ))}
+
+        {/* the curve */}
+        {fillD && <path d={fillD} fill={`url(#${gradId})`} />}
+        {pathD && (
+          <path
+            d={pathD} fill="none" stroke={_tone.stroke}
+            strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round"
+          />
+        )}
+
+        {/* action dots when zoomed in enough */}
+        {drawPts && visible.map((p, i) => (
+          <circle
+            key={i} cx={xFor(p.at)} cy={yFor(p.pos)} r={2.2}
+            fill={_tone.dot} stroke="#fff" strokeWidth={0.5}
+          />
+        ))}
+
+        {/* playhead — vertical line + top-edge triangle pip */}
+        {currentMs != null && currentMs >= vpStart && currentMs <= vpEnd && (
+          <>
+            <line
+              x1={xFor(currentMs)} x2={xFor(currentMs)} y1={0} y2={height}
+              stroke="#fff" strokeWidth={1} strokeOpacity={0.9}
+            />
+            <polygon
+              points={`${xFor(currentMs) - 4},${padTop} ${xFor(currentMs) + 4},${padTop} ${xFor(currentMs)},${padTop + 5}`}
+              fill="#fff"
+            />
+          </>
+        )}
+      </svg>
     </div>
   );
 }

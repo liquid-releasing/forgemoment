@@ -124,6 +124,19 @@ Real audio + funscript renderers are scoped to the **chapter** when a
 chapter is supplied (chapter-relative baton), or to the **full track**
 otherwise.
 
+## Documentation
+
+The repo has a [user guide in `docs/`](docs/README.md):
+
+| Topic | When to read |
+|---|---|
+| [Getting started](docs/getting-started.md) | First-time install + design tokens + dev loop |
+| [Master clock contract](docs/master-clock.md) | Before wiring `MediaViewer` into anything |
+| [Component reference](docs/components.md) | Props for every component, organized by category |
+| [Carve-in guide](docs/carve-in.md) | Replacing a local copy with a forgemoment import |
+| [Recipes](docs/recipes.md) | Cookbook of common compositions |
+| [Maintainer notes](docs/maintainer-notes.md) | Why the API looks the way it does (extenders read this) |
+
 ## Local dev
 
 ```bash

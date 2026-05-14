@@ -70,14 +70,22 @@ const HELP_ITEMS = [
 ];
 
 export function App() {
-  const [currentMs, setCurrentMs] = useState(0);
+  // Initial chapter scope is the second chapter (Build, 60_000ms+). The
+  // playhead initializes inside that scope so first impression is "the
+  // baton is right at the chapter start" rather than "the baton is
+  // faded and far to the left because the playhead is 60s before the
+  // visible scope." Library is doing the right thing (showing the
+  // "out-of-scope" indicator); the playground just needs to start
+  // inside the scope.
+  const initialScopedChapter = INITIAL_CHAPTERS[1];
+  const [currentMs, setCurrentMs] = useState(initialScopedChapter.at_ms);
   const [isPlaying, setIsPlaying] = useState(false);
   const [mode, setMode] = useState('video');
   const [batonObservers, setBatonObservers] = useState({ count: 0, lastMs: 0 });
   const [marks, setMarks] = useState([]);
   const [markLabel, setMarkLabel] = useState('Chapter');
   const [chapters, setChapters] = useState(INITIAL_CHAPTERS);
-  const [scopedChapterId, setScopedChapterId] = useState(INITIAL_CHAPTERS[1].id);
+  const [scopedChapterId, setScopedChapterId] = useState(initialScopedChapter.id);
   const [scriptViewport, setScriptViewport] = useState('chapter');
   const [selectedPhraseId, setSelectedPhraseId] = useState(null);
   const [activeTab, setActiveTab] = useState('viewer');
@@ -127,7 +135,20 @@ export function App() {
     })),
   ];
   const scopeValue = scopedChapterId ?? '__all';
-  const handleScopeChange = (id) => setScopedChapterId(id === '__all' ? null : id);
+  // When the scope changes, also seek the playhead into the new scope.
+  // Without this, scoping to a chapter that doesn't contain currentMs
+  // leaves the baton out-of-range and the play loop has to crawl
+  // through dead time before the playhead enters the visible scope.
+  // ChapterStrip already does this on click (onSelect + onSeek); the
+  // TopBar ScopePicker has to do it explicitly because ScopePicker is
+  // a generic picker that doesn't know "scopes have time ranges."
+  const handleScopeChange = (id) => {
+    setScopedChapterId(id === '__all' ? null : id);
+    if (id !== '__all') {
+      const ch = chapters.find((c) => c.id === id);
+      if (ch) setCurrentMs(ch.at_ms);
+    }
+  };
 
   // Pipeline state for the TabStrip — flips on "Accept" in any tab.
   // Demonstrates the green-dot + ready-state machinery without

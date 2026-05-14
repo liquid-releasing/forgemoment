@@ -1,0 +1,44 @@
+{
+  "name": "forgemoment",
+  "version": "0.0.1",
+  "description": "Shared React component library for the lqr studio family — primitives, charts/timeline, MediaViewer (master clock), HoldSeekButton, TransformPanel, AppShell.",
+  "type": "module",
+  "main": "./dist/forgemoment.cjs.js",
+  "module": "./dist/forgemoment.es.js",
+  "exports": {
+    ".": {
+      "import": "./dist/forgemoment.es.js",
+      "require": "./dist/forgemoment.cjs.js"
+    },
+    "./styles": "./dist/forgemoment.css"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "lucide-react": "^0.460.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.3"
+  },
+  "license": "MIT",
+  "author": "Liquid Releasing",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/liquid-releasing/forgemoment.git"
+  }
+}

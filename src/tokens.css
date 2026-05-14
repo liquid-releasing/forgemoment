@@ -1,0 +1,77 @@
+/* forgemoment — design tokens
+ *
+ * The CSS variables every component reads. Consumers `import
+ * "forgemoment/styles"` (or "@liquidreleasing/forgemoment/styles") to
+ * pull these in once at the app root.
+ *
+ * Mirrors `forge-ui-design/iterations/02-haptics/colors_and_type.css`,
+ * the source of truth for the lqr studio visual language. If that file
+ * changes, this one should too — but until forge-ui-design becomes an
+ * installable package, we vendor the tokens.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+:root {
+  /* Colors */
+  --bg:            #0e1117;
+  --surface:       #1a1d27;
+  --surface-2:     #12151e;
+  --surface-3:     #232735;
+  --border:        #2d3148;
+  --border-strong: #3a3f5c;
+
+  --text:          #fafafa;
+  --text-muted:    #9ba3c4;
+  --text-dim:      #6b7390;
+
+  --accent:        #ff4b4b;
+  --accent-2:      #ff7b7b;
+  --accent-warm:   #ff8c42;
+  --accent-deep:   #c93535;
+  --accent-soft:   #2b3340;
+
+  --success:       #3ed598;
+  --warn:          #ffb547;
+  --danger:        #ff5470;
+  --info:          #4dabf7;
+
+  /* Funscript chart velocity gradient (perceptual) */
+  --chart-v0: #1f3a8a;
+  --chart-v1: #2563eb;
+  --chart-v2: #06b6d4;
+  --chart-v3: #22c55e;
+  --chart-v4: #eab308;
+  --chart-v5: #f97316;
+  --chart-v6: #ef4444;
+
+  /* Type */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Spacing (8px grid w/ 4 step at bottom) */
+  --s-1:  4px;  --s-2:  8px;  --s-3: 12px; --s-4: 16px;
+  --s-5: 24px;  --s-6: 32px;  --s-8: 48px; --s-10: 64px;
+
+  /* Radii */
+  --r-1: 4px; --r-2: 6px; --r-3: 8px; --r-4: 10px; --r-5: 12px;
+
+  /* Shadows / elevation */
+  --elev-1: 0 2px 6px rgba(0,0,0,0.4);
+  --elev-2: 0 6px 20px rgba(0,0,0,0.4);
+  --elev-3: 0 12px 40px rgba(0,0,0,0.55);
+  --glow-accent: 0 0 0 3px rgba(255,75,75,0.25);
+
+  /* Easing & motion */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emph:     cubic-bezier(0.3, 0, 0, 1);
+  --dur-fast: 100ms; --dur-base: 180ms; --dur-slow: 320ms;
+}
+
+/* The "mono" utility class — primitives use this for time-readout
+ * tabular-numeric rendering. Consumers can add it anywhere they need
+ * the same numeric column behavior. */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}

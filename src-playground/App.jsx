@@ -20,7 +20,7 @@ import {
   AcceptBar, Button, Card, ChapterStrip, Field, HoldSeekButton,
   MediaViewer, Pill, ScopePicker, ScriptChart, SectionLabel, Segmented,
   Slider, StatusBar, TabBody, TabHeader, TabStrip, TextInput, TopBar,
-  fmtTime,
+  TransformPanel, fmtTime,
 } from 'forgemoment';
 
 const TRACK_DURATION_MS = 300_000; // 5 minutes
@@ -60,7 +60,57 @@ const FAKE_PHRASES = [
 const TABS = [
   { id: 'viewer',     label: 'Viewer',     icon: 'film',     pipeline: 'viewer'     },
   { id: 'curve',      label: 'Curve',      icon: 'activity', pipeline: 'curve'      },
+  { id: 'transform',  label: 'Transform',  icon: 'sliders',  pipeline: 'transform'  },
   { id: 'primitives', label: 'Primitives', icon: 'layers',   pipeline: 'primitives' },
+];
+
+// Small fake transform catalog so TransformPanel has something to chew
+// on. Real consumers (FFP) pass a much larger catalog (~30 transforms
+// across categories) — the panel is parametric so it doesn't care
+// about size.
+const FAKE_TRANSFORMS = [
+  // tone
+  { id: 'tone.warm',   category: 'tone', label: 'Warm',
+    summary: 'Smooth out hard transients; round off the curve.',
+    description: 'Applies a gentle low-pass over the action sequence so peaks and valleys feel less abrupt. Useful for shifting a percussive script towards a more sustained feel without losing rhythm.',
+    params: [
+      { id: 'amount', label: 'Amount', min: 0, max: 100, step: 1, default: 60, unit: '%' },
+    ],
+    bestFor: ['tease', 'recover'] },
+  { id: 'tone.bright', category: 'tone', label: 'Bright',
+    summary: 'Sharpen transients; emphasize attack.',
+    description: 'High-pass-style emphasis on action edges. Pairs well with percussive source material and the climax phrase tag.',
+    params: [
+      { id: 'amount', label: 'Amount', min: 0, max: 100, step: 1, default: 70, unit: '%' },
+      { id: 'gate',   label: 'Gate',   min: 0, max: 50,  step: 1, default: 8 },
+    ],
+    bestFor: ['climax'] },
+  // behavior
+  { id: 'behavior.halve',  category: 'behavior', label: 'Halve density',
+    summary: 'Keep every other action.',
+    description: 'Removes alternate actions. Use when a section feels too busy — fast → steady, steady → slow.',
+    params: [],
+    bestFor: ['build', 'climax'] },
+  { id: 'behavior.double', category: 'behavior', label: 'Double density',
+    summary: 'Interpolate between adjacent actions.',
+    description: 'Inserts a midpoint between every adjacent pair of actions. Useful for slow sections that need more motion without changing the shape.',
+    params: [],
+    bestFor: ['build'] },
+  { id: 'behavior.swing',  category: 'behavior', label: 'Swing',
+    summary: 'Apply a triplet-ish rhythm to even-spaced actions.',
+    description: 'Shifts every second action slightly later in time, giving a swing/shuffle feel without changing the position values.',
+    params: [
+      { id: 'amount',  label: 'Amount',  min: 0, max: 100, step: 1, default: 40, unit: '%' },
+    ] },
+  // structural
+  { id: 'structural.fade-out', category: 'structural', label: 'Fade out',
+    summary: 'Linear amplitude decay over the phrase.',
+    description: 'Multiplies position values by a falling ramp from 1.0 at the start to 0.0 at the end of the phrase. Useful for resolution sections.',
+    params: [
+      { id: 'curve', label: 'Curve', min: 0, max: 100, step: 1, default: 50,
+        unit: '%' },
+    ],
+    bestFor: ['recover'] },
 ];
 
 const HELP_ITEMS = [
@@ -90,6 +140,12 @@ export function App() {
   const [selectedPhraseId, setSelectedPhraseId] = useState(null);
   const [activeTab, setActiveTab] = useState('viewer');
   const [accepted, setAccepted] = useState(false);
+  // Transform tab state — TransformPanel is fully controlled, so the
+  // parent owns category / selected transform / parameter values.
+  const [transformCategory, setTransformCategory] = useState('behavior');
+  const [transformId, setTransformId] = useState('behavior.halve');
+  const [transformParams, setTransformParams] = useState({});
+  const [appliedTransform, setAppliedTransform] = useState(null);
 
   const scopedChapter = chapters.find((c) => c.id === scopedChapterId) || null;
   const viewerChapter = scopedChapter && {
@@ -156,6 +212,7 @@ export function App() {
   const pipelineState = {
     viewer:     { accepted: activeTab !== 'viewer' || accepted },
     curve:      { accepted: false },
+    transform:  { accepted: !!appliedTransform },
     primitives: { accepted: false },
   };
 
@@ -232,6 +289,14 @@ export function App() {
             scriptViewport={scriptViewport} setScriptViewport={setScriptViewport}
             selectedPhraseId={selectedPhraseId} setSelectedPhraseId={setSelectedPhraseId}
             scopedChapter={scopedChapter}
+          />
+        )}
+        {activeTab === 'transform' && (
+          <TransformTab
+            category={transformCategory} setCategory={setTransformCategory}
+            transformId={transformId} setTransformId={setTransformId}
+            params={transformParams} setParams={setTransformParams}
+            applied={appliedTransform} setApplied={setAppliedTransform}
           />
         )}
         {activeTab === 'primitives' && (
@@ -395,6 +460,102 @@ function CurveTab({
         height={260}
       />
     </>
+  );
+}
+
+function TransformTab({
+  category, setCategory, transformId, setTransformId,
+  params, setParams, applied, setApplied,
+}) {
+  // When the user picks a different category, also pick the first
+  // transform in that category. Without this, transformId can point
+  // to a value that's filtered out of the visible dropdown, leaving
+  // the select with an out-of-range value.
+  const handleCategoryChange = (next) => {
+    setCategory(next);
+    const first = FAKE_TRANSFORMS.find((t) => t.category === next);
+    if (first) setTransformId(first.id);
+    setParams({});
+  };
+
+  const handleTransformChange = (id) => {
+    setTransformId(id);
+    setParams({});
+  };
+
+  const handleApply = () => {
+    const tx = FAKE_TRANSFORMS.find((t) => t.id === transformId);
+    if (!tx) return;
+    setApplied({
+      label: tx.label,
+      params: params,
+      at: new Date().toLocaleTimeString(),
+    });
+  };
+
+  const handleCancel = () => {
+    setApplied(null);
+    setParams({});
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 22, alignItems: 'stretch', minHeight: 540 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 22 }}>
+        <TabHeader
+          eyebrow="Transform"
+          title="TransformPanel — right-side editor"
+          subtitle="Category radio · transform select (filtered by category) · dynamic parameter sliders · Apply/Cancel. Catalog + tags are consumer-owned props; the panel is fully controlled."
+        />
+        <Card padding={20}>
+          <SectionLabel>About this demo</SectionLabel>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            The catalog here is{' '}
+            <code style={{
+              background: 'var(--surface-2)', padding: '1px 6px',
+              borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 12,
+            }}>FAKE_TRANSFORMS</code> — a small {FAKE_TRANSFORMS.length}-entry array.
+            Real consumers pass a much larger catalog (FFP ships ~30
+            transforms across categories) — TransformPanel is parametric
+            so it doesn&apos;t care about size.
+          </div>
+        </Card>
+        <Card padding={20}>
+          <SectionLabel>Apply result</SectionLabel>
+          {applied
+            ? (
+              <div style={{ fontSize: 13, color: 'var(--text)' }}>
+                <div style={{ marginBottom: 8 }}>
+                  Applied <strong>{applied.label}</strong> at{' '}
+                  <span className="mono">{applied.at}</span>
+                </div>
+                <pre style={{
+                  margin: 0, padding: 10, borderRadius: 6,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  fontSize: 11, color: 'var(--text-muted)',
+                  fontFamily: 'var(--font-mono)',
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                }}>
+                  {JSON.stringify(applied.params, null, 2)}
+                </pre>
+              </div>
+            )
+            : <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>Nothing applied yet — pick a transform and hit Apply.</div>
+          }
+        </Card>
+      </div>
+      <TransformPanel
+        transforms={FAKE_TRANSFORMS}
+        category={category}
+        onCategoryChange={handleCategoryChange}
+        transformId={transformId}
+        onTransformChange={handleTransformChange}
+        params={params}
+        onParamsChange={setParams}
+        onApply={handleApply}
+        onCancel={handleCancel}
+      />
+    </div>
   );
 }
 

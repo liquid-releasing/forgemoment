@@ -21,6 +21,7 @@ canonical Level-3 reusable UI per [forgegen/docs/architecture/canonical-emit-pat
 | **`StatusBar`** | Bottom strip — Synced indicator / scope / chain file / version stamp. All optional. |
 | **`AcceptBar`** | The canonical "Accept and chain" bar — primary / Reset / accepted-state Pill / chain-file hint. |
 | **`TabBody`**, **`TabHeader`**, **`SectionLabel`** | Layout helpers for the inside of a tab. |
+| **`TransformPanel`** | Right-side editor with category radio · transform select (filtered by category) · dynamic parameter sliders · Apply/Cancel. `transforms` / `tags` / `categories` props replace iter 08's `window.FF_TRANSFORMS` / `window.FF_TAGS` globals. Fully controlled — parent owns selection + parameter values. |
 | `PhraseRibbon` | Horizontal phrase strip with click-to-select. `tags` prop replaces iter 08's `window.FF_TAGS` global. |
 | `BehaviorTagBar` | Stacked % bar showing time distribution across behavior tags. |
 | `ChartTitleStrip` | Small title-strip header (title · meta · meta · time). |
@@ -39,10 +40,11 @@ not yet ported:
 `ScopePlayer`, `MiniWave`, `Sparkline`, `DiffSparkline`, `BpmBandChart`,
 `PhraseDetailZoomChart`.
 
-Other files from [REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md)
-not yet started:
-
-`TransformPanel.jsx`.
+All six original carve-out targets from
+[REUSABLE_INVENTORY.md](https://github.com/liquid-releasing/forge-ui-design/blob/main/REUSABLE_INVENTORY.md)
+(primitives, Charts subset, MediaViewer, HoldSeekButton, AppShell,
+TransformPanel) are now shipped. Only the deferred Charts heavies
+remain.
 
 ## Master clock contract
 

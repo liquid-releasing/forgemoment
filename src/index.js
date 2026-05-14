@@ -36,6 +36,11 @@ export {
   TopBar,
 } from './AppShell.jsx';
 
+// TransformPanel — right-side editor for transform authoring.
+// `transforms` and `tags` catalogs are consumer-owned (replaces iter
+// 08's window.FF_TRANSFORMS / window.FF_TAGS).
+export { TransformPanel } from './TransformPanel.jsx';
+
 // Charts — visualisation primitives (subset; ScopePlayer / BpmBandChart
 // / PreviewChart still deferred until a consumer needs them).
 export {

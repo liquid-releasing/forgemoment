@@ -1112,17 +1112,105 @@ export function MiniWave({ seed = '', color = '#ff7b7b', height = 24 }) {
 // Tiny actions chart for table rows / phrase lists. Maps `at` → x and
 // `pos` → y so it reads as a miniaturised funscript line. `filled=true`
 // closes the path to the baseline for a more iconic "shape".
+// Velocity colormap — matches forge_ui_components/funscript_chart/core.py.
+// Blue (slow) → cyan → green → yellow → red (fast). The canonical funscript
+// visualization across the lqr studio family; do not change without aligning
+// the Python side too.
+const VELOCITY_STOPS = [
+  [0.0,  '#1a2fff'],
+  [0.25, '#00bfff'],
+  [0.5,  '#00e000'],
+  [0.75, '#ffdd00'],
+  [1.0,  '#ff1a1a'],
+];
+
+function _lerpHex(c0, c1, t) {
+  const r0 = parseInt(c0.slice(1, 3), 16);
+  const g0 = parseInt(c0.slice(3, 5), 16);
+  const b0 = parseInt(c0.slice(5, 7), 16);
+  const r1 = parseInt(c1.slice(1, 3), 16);
+  const g1 = parseInt(c1.slice(3, 5), 16);
+  const b1 = parseInt(c1.slice(5, 7), 16);
+  const r = Math.round(r0 + (r1 - r0) * t);
+  const g = Math.round(g0 + (g1 - g0) * t);
+  const b = Math.round(b0 + (b1 - b0) * t);
+  return `#${[r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function _interpolateStops(stops, t) {
+  const u = Math.max(0, Math.min(1, t));
+  if (u <= stops[0][0]) return stops[0][1];
+  if (u >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (u <= stops[i][0]) {
+      const [p0, c0] = stops[i - 1];
+      const [p1, c1] = stops[i];
+      return _lerpHex(c0, c1, (u - p0) / (p1 - p0));
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+// Sparkline — small line chart of funscript actions.
+//
+// colorMode:
+//   'solid'    — single-color line (back-compat default). `color` prop applies.
+//   'velocity' — per-segment coloring by |Δpos/Δt| normalised to max, mapped
+//                through the canonical blue→red colormap (see VELOCITY_STOPS).
+//                The `color` prop is ignored in this mode; the fill still uses
+//                MONO_BLUE-style transparent backing so the curve reads cleanly
+//                on dark surfaces.
 export function Sparkline({
   actions, start, end, color = 'var(--accent)', filled = false, height = 30,
+  colorMode = 'solid',
 }) {
   if (!actions || actions.length === 0) {
     return <div style={{ height, background: 'var(--surface-2)', borderRadius: 3 }} />;
   }
   const dur = Math.max(1, end - start);
-  const pts = actions.map(a => [((a.at - start) / dur) * 100, 100 - a.pos]);
-  const d = pts.map((p, i) =>
-    `${i === 0 ? 'M' : 'L'} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`
-  ).join(' ');
+  const pts = actions.map((a) => [((a.at - start) / dur) * 100, 100 - a.pos]);
+
+  if (colorMode === 'velocity' && actions.length > 1) {
+    const n = actions.length;
+    const vels = new Array(n);
+    vels[0] = 0;
+    for (let i = 1; i < n; i++) {
+      const dt = Math.max(1, actions[i].at - actions[i - 1].at);
+      vels[i] = Math.abs(actions[i].pos - actions[i - 1].pos) / dt;
+    }
+    vels[0] = vels[1] ?? 0;
+    let maxVel = 0;
+    for (let i = 0; i < n; i++) if (vels[i] > maxVel) maxVel = vels[i];
+    if (maxVel === 0) maxVel = 1;
+
+    const fillPath = filled
+      ? `M ${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)} ` +
+        pts.slice(1).map((p) => `L ${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(' ') +
+        ' L 100 100 L 0 100 Z'
+      : null;
+
+    return (
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+           style={{ width: '100%', height, background: 'var(--bg)', borderRadius: 3 }}>
+        {fillPath && <path d={fillPath} fill="#4C8BF5" fillOpacity={0.08} />}
+        {pts.slice(1).map((p, i) => {
+          const prev = pts[i];
+          const segColor = _interpolateStops(VELOCITY_STOPS, vels[i + 1] / maxVel);
+          return (
+            <line key={i}
+                  x1={prev[0]} y1={prev[1]} x2={p[0]} y2={p[1]}
+                  stroke={segColor} strokeWidth={1.4}
+                  vectorEffect="non-scaling-stroke" />
+          );
+        })}
+      </svg>
+    );
+  }
+
+  // colorMode === 'solid' (default) — single-path, single-color.
+  const d = pts
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`)
+    .join(' ');
   return (
     <svg viewBox="0 0 100 100" preserveAspectRatio="none"
          style={{ width: '100%', height, background: 'var(--bg)', borderRadius: 3 }}>

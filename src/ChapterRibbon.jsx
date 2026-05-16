@@ -53,6 +53,18 @@ export function ChapterRibbon({
   onSelect,                         // (band) => void
   menu = [],                        // [{ id, label, icon?, onClick, disabled? }]
   height = 120,                     // total ribbon height
+  // Show Y axis (0/50/100 position labels) and X axis (time tick labels).
+  // Both default on for the main edit ribbon. Pass `false` to render a
+  // narrow chrome-only strip — used when the ribbon is a *secondary*
+  // scope picker (e.g. chapter row above the predominant phrase row
+  // on the Transform tab). Bands fill the full ribbon area when axes
+  // are hidden.
+  showAxes = true,
+  // Wheel-zoom into the active band. Default on for the primary scope
+  // ribbon (Chapters tab). Pass `false` for secondary scope strips that
+  // shouldn't capture the wheel — the Transform tab's chapter + phrase
+  // rows for example, where zoom belongs to a different UI surface (TBD).
+  zoomable = true,
   // Optional initial viewport. If omitted the ribbon starts full-track.
   // Pass these to deep-link into a particular zoom/pan state.
   initialViewStart,
@@ -92,7 +104,7 @@ export function ChapterRibbon({
   // Pixel measurements. ResizeObserver-driven so the ribbon adapts to
   // the parent container when layout changes (rail width, app window
   // resize, devtools open, etc.). plotWidth is the band area only —
-  // it excludes the Y-axis gutter on the left.
+  // it excludes the Y-axis gutter on the left when axes are shown.
   const wrapRef = useRef(null);
   const [outerWidth, setOuterWidth] = useState(800);
   useEffect(() => {
@@ -101,7 +113,9 @@ export function ChapterRibbon({
     ro.observe(wrapRef.current);
     return () => ro.disconnect();
   }, []);
-  const pxWidth = Math.max(1, outerWidth - Y_AXIS_PX);
+  const yAxisPx = showAxes ? Y_AXIS_PX : 0;
+  const xAxisPx = showAxes ? X_AXIS_PX : 0;
+  const pxWidth = Math.max(1, outerWidth - yAxisPx);
 
   const viewSpan = Math.max(1, viewEnd - viewStart);
   const xFor = (ms) => ((ms - viewStart) / viewSpan) * pxWidth;
@@ -116,6 +130,10 @@ export function ChapterRibbon({
   // around what I'm editing" knob. Selection (clicking another band) is
   // the only way to change which chapter sits in the center.
   const handleWheel = (e) => {
+    // When zoomable is off, let the wheel event bubble so the page can
+    // scroll naturally. Don't preventDefault — that would trap scroll
+    // inside an inert ribbon.
+    if (!zoomable) return;
     if (sortedBands.length === 0 || !active) return;
     e.preventDefault();
     const pivot = (active.at_ms + active.end_ms) / 2;
@@ -172,8 +190,11 @@ export function ChapterRibbon({
     );
   }
 
-  const bandsHeight = height - X_AXIS_PX;
-  const xTicks = useMemo(() => buildXTicks(viewStart, viewEnd, pxWidth), [viewStart, viewEnd, pxWidth]);
+  const bandsHeight = height - xAxisPx;
+  const xTicks = useMemo(
+    () => (showAxes ? buildXTicks(viewStart, viewEnd, pxWidth) : []),
+    [showAxes, viewStart, viewEnd, pxWidth],
+  );
 
   return (
     <div
@@ -187,19 +208,21 @@ export function ChapterRibbon({
     >
       {/* Y-axis gutter — fixed, doesn't zoom. Position is 0..100 with
           top=100 (max) and bottom=0 (rest), matching the funscript
-          convention used by Sparkline inside each band. */}
-      <YAxis height={bandsHeight} />
+          convention used by Sparkline inside each band. Suppressed
+          when showAxes is false (narrow-chrome use). */}
+      {showAxes && <YAxis height={bandsHeight} />}
 
-      {/* Plot area: bands above, X axis below. Wheel attaches here so
-          the gutter doesn't capture zoom gestures. */}
+      {/* Plot area: bands above, X axis below (X axis hidden when
+          showAxes is false). Wheel attaches here so the gutter doesn't
+          capture zoom gestures. */}
       <div
         onWheel={handleWheel}
         style={{
           position: 'absolute',
-          left: Y_AXIS_PX, right: 0, top: 0,
+          left: yAxisPx, right: 0, top: 0,
           height,
         }}
-        title="Wheel to zoom · click a band to focus"
+        title={zoomable ? 'Wheel to zoom · click a band to focus' : 'Click a band to focus'}
       >
         {/* Bands */}
         <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: bandsHeight, overflow: 'hidden' }}>
@@ -223,6 +246,14 @@ export function ChapterRibbon({
               />
             );
           })}
+
+          {/* No playhead cursor in the ribbon — chapters are short by
+              design (that's why we broke long funscripts into chapters
+              in the first place). Real-time playback position lives in
+              the MediaViewer's HH:MM:SS.mmm timecode and transport. The
+              ribbon's job is *structural* (which chapter, what shape),
+              not temporal. Keeping the strip free of a moving cursor
+              also removes a sync surface we don't need. */}
         </div>
 
         {/* X axis */}

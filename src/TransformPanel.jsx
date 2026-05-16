@@ -61,14 +61,21 @@ export function TransformPanel({
   // Layout
   width = 360,
   hideHeader = false,
+  // When true, the category radio row is suppressed and every transform
+  // in the catalog is shown in the dropdown regardless of category. Used
+  // by tabs that are already scoped to one category (e.g. Patterns tab
+  // pre-filters to Structural transforms — the radios would be useless).
+  hideCategories = false,
 }) {
   const tx = transforms.find((t) => t.id === transformId);
 
   // Filter transforms by the active category; memoised so the dropdown
-  // isn't re-filtering on unrelated parent renders.
+  // isn't re-filtering on unrelated parent renders. When categories are
+  // hidden, the full catalog is shown (the consumer is responsible for
+  // pre-filtering the `transforms` prop to the right scope).
   const visibleTransforms = useMemo(
-    () => transforms.filter((t) => t.category === category),
-    [transforms, category],
+    () => (hideCategories ? transforms : transforms.filter((t) => t.category === category)),
+    [transforms, category, hideCategories],
   );
 
   // Per-category counts populate the category-radio hint when the
@@ -109,7 +116,10 @@ export function TransformPanel({
       )}
 
       <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
-        {/* Category radios — one button per category, equal-width grid */}
+        {/* Category radios — one button per category, equal-width grid.
+            Suppressed when `hideCategories` is set (tabs that pre-filter
+            to a single category). */}
+        {!hideCategories && (
         <div style={{ marginBottom: 18 }}>
           <SectionLabel>Category</SectionLabel>
           <div style={{
@@ -144,6 +154,7 @@ export function TransformPanel({
             })}
           </div>
         </div>
+        )}
 
         {/* Transform select. Compact dropdown so the parameter sliders
             stay above the fold on small windows. The "Use suggested"

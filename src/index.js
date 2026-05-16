@@ -27,6 +27,11 @@ export { MediaViewer } from './MediaViewer.jsx';
 // Same component will drive the Edit tab's phrase selector.
 export { ChapterRibbon } from './ChapterRibbon.jsx';
 
+// PatternRibbon — secondary scope strip for pattern instances inside the
+// active chapter. Thinner sibling of ChapterRibbon: mono bands, no wave
+// inside (signal lives in the center FunscriptChart pairs), no zoom.
+export { PatternRibbon } from './PatternRibbon.jsx';
+
 // AppShell — TopBar, TabStrip, StatusBar, AcceptBar, ScopePicker,
 // TabBody, TabHeader, SectionLabel. FFP-specific data (FF_TABS,
 // FF_UTILITY_TABS, hardcoded scope picker / logo / help items) is

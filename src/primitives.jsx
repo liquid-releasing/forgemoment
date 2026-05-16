@@ -167,7 +167,10 @@ export function Card({ children, padding = 20, style = {}, hoverable, onClick })
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
+        background: 'var(--surface)',
+        // Split into longhand so the hover override of `borderColor` does
+        // not collide with the `border` shorthand (React warns otherwise).
+        borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border)',
         borderRadius: 10, padding,
         transition: 'background 150ms, border-color 150ms, box-shadow 150ms',
         ...(hoverable && hover ? { boxShadow: 'var(--elev-1)', borderColor: 'var(--border-strong)', cursor: onClick ? 'pointer' : 'default' } : {}),

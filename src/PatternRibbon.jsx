@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from 'react';
 
 const HEIGHT_DEFAULT = 28;
 const MIN_BAND_PX = 2;
+const MIN_LABEL_PX = 44;     // hide band label when the band is narrower than this
 
 export function PatternRibbon({
   bands,                    // pattern instances in scope
@@ -62,6 +63,7 @@ export function PatternRibbon({
         if (rightPx < 0 || leftPx > pxWidth) return null;
         const selected = band.id === selectedId;
         const color = band.color || '#6b7280';
+        const showLabel = widthPx >= MIN_LABEL_PX && band.name;
         return (
           <button
             key={band.id}
@@ -77,8 +79,12 @@ export function PatternRibbon({
               padding: 0,
               cursor: 'pointer',
               boxSizing: 'border-box',
+              fontFamily: 'inherit', fontWeight: 700, fontSize: 11,
+              color: '#0e1117',
+              textShadow: '0 0 4px rgba(255,255,255,0.25)',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}
-          />
+          >{showLabel ? band.name : null}</button>
         );
       })}
     </div>

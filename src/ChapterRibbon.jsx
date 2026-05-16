@@ -396,7 +396,11 @@ function Band({
         <div style={{
           position: 'absolute', top: 4, left: 8, right: 30,
           fontSize: 11.5, fontWeight: 700,
-          color: isGrey ? 'var(--text-muted)' : tone,
+          // Selected band: white title so it reads cleanly over the
+          // brighter tinted background. Non-selected: tone color (or
+          // muted when no tone is set). User flagged 2026-05-16: tone-
+          // color title on the active band fades into the wash.
+          color: selected ? '#ffffff' : (isGrey ? 'var(--text-muted)' : tone),
           textShadow: '0 0 4px rgba(0,0,0,0.55)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           pointerEvents: 'none',

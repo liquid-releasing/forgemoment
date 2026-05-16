@@ -18,14 +18,15 @@ import {
   // import; falling back to a generic placeholder when an icon name
   // isn't mapped means a typo doesn't crash the app.
   Activity, AlertCircle, AlertTriangle, ArrowLeft, ArrowRight, Bookmark, Box, Check, ChevronDown,
-  ChevronLeft, ChevronRight, ChevronUp, Circle, Clock, Cog, Copy, Cpu, Download,
+  ChevronLeft, ChevronRight, ChevronUp, Circle, Clock, Cog, Copy, CornerUpLeft, CornerUpRight,
+  Cpu, Download,
   Edit, ExternalLink, Eye, EyeOff, File, FileCog, FileText, Film, Folder, FolderOpen,
   GitBranch, Hash, HelpCircle,
-  Home, Image, Info, Layers, Library, List, Loader, Lock, LogIn, LogOut,
+  Home, Image, Info, Layers, Library, Link, List, Loader, Lock, LogIn, LogOut,
   Maximize, Menu, MoreHorizontal, MoreVertical, Move, Move3d, Music, Pause, Pencil,
   Play, Plus, Radio, RefreshCcw, RotateCcw, Save, ScanLine, Search, Settings, Settings2,
   Shapes, Share2,
-  SkipBack, SkipForward, Sliders, Square, Star, StepBack, StepForward,
+  Scissors, SkipBack, SkipForward, Sliders, Square, Star, StepBack, StepForward,
   Trash, Trash2, Upload, UploadCloud, User, Video, Volume2, VolumeX, X, Zap,
   ZoomIn, ZoomOut,
 } from 'lucide-react';
@@ -36,13 +37,15 @@ const LUCIDE_MAP = {
   'arrow-right': ArrowRight, bookmark: Bookmark, box: Box, check: Check,
   'chevron-down': ChevronDown, 'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight, 'chevron-up': ChevronUp, circle: Circle,
-  clock: Clock, cog: Cog, copy: Copy, cpu: Cpu, download: Download, edit: Edit,
+  clock: Clock, cog: Cog, copy: Copy,
+  'corner-up-left': CornerUpLeft, 'corner-up-right': CornerUpRight,
+  cpu: Cpu, download: Download, edit: Edit,
   'external-link': ExternalLink, eye: Eye,
   'eye-off': EyeOff, file: File, 'file-cog': FileCog, 'file-text': FileText, film: Film,
   folder: Folder, 'folder-open': FolderOpen, 'git-branch': GitBranch,
   hash: Hash, 'help-circle': HelpCircle,
   home: Home, image: Image, info: Info, layers: Layers, library: Library,
-  list: List, loader: Loader, lock: Lock, 'log-in': LogIn, 'log-out': LogOut,
+  link: Link, list: List, loader: Loader, lock: Lock, 'log-in': LogIn, 'log-out': LogOut,
   maximize: Maximize, menu: Menu, 'more-horizontal': MoreHorizontal,
   'more-vertical': MoreVertical, move: Move, 'move-3d': Move3d, 'axis-3d': Move3d,
   music: Music, pause: Pause,
@@ -50,7 +53,7 @@ const LUCIDE_MAP = {
   'refresh-ccw': RefreshCcw, 'rotate-ccw': RotateCcw, save: Save,
   'scan-line': ScanLine, search: Search, settings: Settings, 'settings-2': Settings2,
   shapes: Shapes,
-  'share-2': Share2, 'skip-back': SkipBack,
+  'share-2': Share2, scissors: Scissors, 'skip-back': SkipBack,
   'skip-forward': SkipForward, sliders: Sliders, square: Square, star: Star,
   'step-back': StepBack, 'step-forward': StepForward,
   trash: Trash, 'trash-2': Trash2, upload: Upload, 'upload-cloud': UploadCloud,
@@ -232,11 +235,17 @@ export function Slider({ value, min = 0, max = 100, step = 1, onChange, label, v
 }
 
 // ─── Segmented (tab strip) ───────────────────────────────────────
-export function Segmented({ options, value, onChange }) {
+export function Segmented({ options, value, onChange, size = 'default' }) {
+  // size='sm' is the compact/dim variant: no surface fill, smaller type,
+  // subtler active state. Used in places where the toggle should sit
+  // quietly above a viewer (e.g. MediaViewer chapter scope, where the
+  // active mode is obvious from the canvas content).
+  const sm = size === 'sm';
   return (
     <div style={{
-      display: 'inline-flex', padding: 3,
-      background: 'var(--surface-2)', borderRadius: 8,
+      display: 'inline-flex', padding: sm ? 2 : 3,
+      background: sm ? 'transparent' : 'var(--surface-2)',
+      borderRadius: sm ? 6 : 8,
       border: '1px solid var(--border)',
     }}>
       {options.map((opt) => {
@@ -248,10 +257,15 @@ export function Segmented({ options, value, onChange }) {
             key={v}
             onClick={() => onChange?.(v)}
             style={{
-              padding: '5px 12px', fontSize: 12, fontWeight: 600, borderRadius: 5, border: 'none',
-              background: active ? 'var(--accent)' : 'transparent',
-              color: active ? '#fff' : 'var(--text-muted)',
+              padding: sm ? '2px 8px' : '5px 12px',
+              fontSize: sm ? 10 : 12,
+              fontWeight: sm ? 500 : 600,
+              borderRadius: sm ? 3 : 5,
+              border: 'none',
+              background: active ? (sm ? 'var(--surface-2)' : 'var(--accent)') : 'transparent',
+              color: active ? (sm ? 'var(--text)' : '#fff') : 'var(--text-dim)',
               cursor: 'pointer', transition: 'all 120ms', fontFamily: 'inherit',
+              letterSpacing: sm ? '0.02em' : 'normal',
             }}
           >
             {lbl}

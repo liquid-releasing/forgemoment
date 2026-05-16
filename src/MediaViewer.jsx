@@ -92,6 +92,7 @@ const MODE_OPTIONS = [
   { value: 'video',     label: 'Video' },
   { value: 'audio',     label: 'Audio' },
   { value: 'funscript', label: 'Funscript' },
+  { value: 'haptic',    label: 'Haptic' },
 ];
 
 export function MediaViewer({
@@ -116,6 +117,28 @@ export function MediaViewer({
   prevTitle = 'Previous chapter',
   showMark = true,
   showModeToggle = true,
+  // Mode-toggle layout knobs. Used by the FunscriptForge Chapters tab to
+  // place the toggle quietly in the top-left of the viewer (instead of the
+  // default centered chip strip) and shrink it so the active mode reads
+  // as ambient context rather than UI chrome.
+  modeToggleAlign = 'center',  // 'start' | 'center' | 'end'
+  modeToggleSize = 'default',  // 'default' | 'sm'
+  // Hide the corner "VIDEO" / "AUDIO" / "FUNSCRIPT" mode label. Redundant
+  // with the visible toggle in most contexts; the Chapters tab opts it out.
+  showModeLabel = true,
+  // Transport controls — declared list rendered in order. Each entry is one
+  // of: 'prev' | 'frame-back' | 'back5' | 'play' | 'forward5' |
+  // 'frame-forward' | 'next'. The play button is always rendered with the
+  // primary (circular accent) treatment. Consumers pick whichever set fits
+  // the editing scope:
+  //   Chapters tab:   ['prev','back5','play','forward5','next']
+  //   Edit/Phrases:   ['prev','frame-back','back5','play','forward5','frame-forward','next']
+  //   Library scrub:  ['back5','play','forward5']
+  controls = ['prev', 'frame-back', 'back5', 'play', 'forward5', 'frame-forward', 'next'],
+  // Show a centered HH:MM:SS.mmm timecode readout below the media surface.
+  // Updates from `currentMs` so it ticks at whatever rate the consumer drives
+  // playback. Millisecond precision is intentional for frame-accurate edits.
+  showTimecode = true,
   totalMs,
   videoSrc,
   width = 240,
@@ -183,6 +206,13 @@ export function MediaViewer({
     onSeek?.((currentMs || 0) + dir * 33);
   };
   const back5 = () => onSeek?.(Math.max(0, (currentMs || 0) - 5000));
+  // Forward 5s symmetric with back5. When totalMs is known clamp to it,
+  // otherwise just step forward — the parent decides what to do with an
+  // overshoot (typically clamp into chapter.end / track length).
+  const forward5 = () => {
+    const cap = chapter ? chapter.end : (totalMs ?? Number.POSITIVE_INFINITY);
+    onSeek?.(Math.min(cap, (currentMs || 0) + 5000));
+  };
 
   return (
     <div style={{
@@ -195,14 +225,25 @@ export function MediaViewer({
     }}>
       {/* Mode toggle — chip strip pinned above the thumbnail. Pinning
           above rather than overlaying keeps the canvas content clean
-          and gives the toggle a stable hit target regardless of mode. */}
+          and gives the toggle a stable hit target regardless of mode.
+          Alignment + size are consumer-tuned (chapter-scoped viewers
+          prefer flex-start / sm so the toggle reads as quiet context). */}
       {showModeToggle && (
         <div style={{
-          padding: '6px 8px',
+          padding: modeToggleSize === 'sm' ? '4px 6px' : '6px 8px',
           borderBottom: '1px solid var(--border)',
-          display: 'flex', justifyContent: 'center',
+          display: 'flex',
+          justifyContent:
+            modeToggleAlign === 'start' ? 'flex-start'
+            : modeToggleAlign === 'end' ? 'flex-end'
+            : 'center',
         }}>
-          <Segmented options={MODE_OPTIONS} value={mode} onChange={handleModeChange} />
+          <Segmented
+            options={MODE_OPTIONS}
+            value={mode}
+            onChange={handleModeChange}
+            size={modeToggleSize}
+          />
         </div>
       )}
 
@@ -228,6 +269,9 @@ export function MediaViewer({
           funscript
             ? <FunscriptCurve actions={funscript.actions} batonRange={batonRange} />
             : <FunscriptPlaceholder />
+        )}
+        {mode === 'haptic' && (
+          <HapticPlaceholder />
         )}
 
         {/* Baton — the playhead. Same look across modes.
@@ -269,14 +313,17 @@ export function MediaViewer({
         )}
 
         {/* Corner mode label — redundant with the toggle but useful
-            when the toggle is hidden via showModeToggle=false. */}
-        <div style={{
-          position: 'absolute', top: 6, left: 8,
-          fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
-          color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase',
-        }}>
-          {mode}
-        </div>
+            when the toggle is hidden via showModeToggle=false. Opt out
+            via showModeLabel=false in places where both are shown. */}
+        {showModeLabel && (
+          <div style={{
+            position: 'absolute', top: 6, left: 8,
+            fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+            color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase',
+          }}>
+            {mode}
+          </div>
+        )}
 
         {chapter && (
           <div style={{
@@ -292,17 +339,21 @@ export function MediaViewer({
         )}
       </div>
 
-      {/* Time readout */}
-      <div className="mono" style={{
-        padding: '5px 10px', fontSize: 10.5,
-        color: 'var(--text-muted)',
-        borderTop: '1px solid var(--border)',
-        display: 'flex', justifyContent: 'space-between',
-      }}>
-        <span>{fmtShort(currentMs)}</span>
-        {chapter && <span>{fmtShort(chapter.end)}</span>}
-        {!chapter && totalMs != null && <span>{fmtShort(totalMs)}</span>}
-      </div>
+      {/* Prominent centered timecode — HH:MM:SS.mmm. Drives off `currentMs`,
+          so it ticks at whatever rate the consumer drives playback. The
+          older split start/end readout has been retired: the chapter strip
+          adjacent to the player now carries that context. Pass
+          `showTimecode={false}` to opt out. */}
+      {showTimecode && (
+        <div className="mono" style={{
+          padding: '6px 10px', fontSize: 15,
+          color: 'var(--text)', letterSpacing: '0.02em',
+          borderTop: '1px solid var(--border)',
+          textAlign: 'center', fontVariantNumeric: 'tabular-nums',
+        }}>
+          {fmtHHMMSSmmm(currentMs)}
+        </div>
+      )}
 
       {/* Transport — chapter nav + frame jog + play/pause.
           Icon choices on the frame-jog (◀/▶ → step-back/step-forward):
@@ -315,18 +366,40 @@ export function MediaViewer({
         padding: '6px 8px', display: 'flex', gap: 4, justifyContent: 'center',
         borderTop: '1px solid var(--border)',
       }}>
-        <TransportButton title={prevTitle} onClick={prev}>⏮</TransportButton>
-        <TransportButton title="Frame back" onClick={() => stepFrame(-1)}>
-          <Icon name="step-back" size={14} />
-        </TransportButton>
-        <TransportButton title="Back 5s" onClick={back5}>⏪</TransportButton>
-        <TransportButton primary title={isPlaying ? 'Pause' : 'Play'} onClick={onPlayPause}>
-          {isPlaying ? '⏸' : '▶'}
-        </TransportButton>
-        <TransportButton title="Frame forward" onClick={() => stepFrame(1)}>
-          <Icon name="step-forward" size={14} />
-        </TransportButton>
-        <TransportButton title={nextTitle} onClick={next}>⏭</TransportButton>
+        {controls.map((kind, i) => {
+          switch (kind) {
+            case 'prev':
+              return <TransportButton key={i} title={prevTitle} onClick={prev}>⏮</TransportButton>;
+            case 'frame-back':
+              return (
+                <TransportButton key={i} title="Frame back" onClick={() => stepFrame(-1)}>
+                  <Icon name="step-back" size={14} />
+                </TransportButton>
+              );
+            case 'back5':
+              return <TransportButton key={i} title="Back 5s" onClick={back5}>⏪</TransportButton>;
+            case 'play':
+              return (
+                <TransportButton key={i} primary
+                                 title={isPlaying ? 'Pause' : 'Play'}
+                                 onClick={onPlayPause}>
+                  {isPlaying ? '⏸' : '▶'}
+                </TransportButton>
+              );
+            case 'forward5':
+              return <TransportButton key={i} title="Forward 5s" onClick={forward5}>⏩</TransportButton>;
+            case 'frame-forward':
+              return (
+                <TransportButton key={i} title="Frame forward" onClick={() => stepFrame(1)}>
+                  <Icon name="step-forward" size={14} />
+                </TransportButton>
+              );
+            case 'next':
+              return <TransportButton key={i} title={nextTitle} onClick={next}>⏭</TransportButton>;
+            default:
+              return null;
+          }
+        })}
       </div>
 
       {showMarkResolved && (
@@ -419,6 +492,31 @@ function AudioWavePlaceholder() {
   );
 }
 
+// Haptic-channel placeholder. The haptic view will eventually render a
+// stim-style multi-channel strip (Stim tab signal preview); for now it
+// matches the funscript placeholder's footprint with a denser, dual-
+// channel feel so haptic-vs-funscript reads as visually distinct.
+function HapticPlaceholder() {
+  const top = Array.from({ length: 48 }, (_, i) => {
+    const x = (i / 47) * 100;
+    const y = 22 + Math.sin(i * 0.5) * 10 + Math.cos(i * 1.1) * 4;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const bot = Array.from({ length: 48 }, (_, i) => {
+    const x = (i / 47) * 100;
+    const y = 42 + Math.sin(i * 0.7 + 1.4) * 8 + Math.cos(i * 1.3) * 4;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  return (
+    <svg width="100%" height="100%" viewBox="0 0 100 60" preserveAspectRatio="none" style={{ display: 'block' }}>
+      <line x1="0" y1="22" x2="100" y2="22" stroke="rgba(255,255,255,0.04)" strokeWidth="0.4" />
+      <line x1="0" y1="42" x2="100" y2="42" stroke="rgba(255,255,255,0.04)" strokeWidth="0.4" />
+      <polyline points={top.join(' ')} fill="none" stroke="rgba(255,180,80,0.65)" strokeWidth="0.8" />
+      <polyline points={bot.join(' ')} fill="none" stroke="rgba(255,80,140,0.65)" strokeWidth="0.8" />
+    </svg>
+  );
+}
+
 function FunscriptPlaceholder() {
   const pts = Array.from({ length: 48 }, (_, i) => {
     const x = (i / 47) * 100;
@@ -492,9 +590,19 @@ function FunscriptCurve({ actions, batonRange }) {
 }
 
 // ─── Local time formatter (avoids primitives circular import risk) ──
-function fmtShort(ms) {
-  const s = Math.max(0, Math.floor((ms ?? 0) / 1000));
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+// HH:MM:SS.mmm — used by the prominent centered timecode. Pads HH/MM/SS to
+// two digits and milliseconds to three. Always shows hours so the display
+// width stays stable across short and long-form material (no layout jump
+// when crossing 60min).
+function fmtHHMMSSmmm(ms) {
+  const total = Math.max(0, Math.floor(ms ?? 0));
+  const millis = total % 1000;
+  const totalSec = Math.floor(total / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const sec = totalSec % 60;
+  return (
+    `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:`
+    + `${String(sec).padStart(2, '0')}.${String(millis).padStart(3, '0')}`
+  );
 }

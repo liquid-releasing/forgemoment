@@ -21,6 +21,12 @@ export {
 export { HoldSeekButton } from './HoldSeekButton.jsx';
 export { MediaViewer } from './MediaViewer.jsx';
 
+// ChapterRibbon — rich, scope-aware band strip (waveform + tone + per-band
+// 3-dot menu, active+peek layout). Supersedes the lighter ChapterStrip in
+// Charts.jsx for any consumer that wants content preview inside the strip.
+// Same component will drive the Edit tab's phrase selector.
+export { ChapterRibbon } from './ChapterRibbon.jsx';
+
 // AppShell — TopBar, TabStrip, StatusBar, AcceptBar, ScopePicker,
 // TabBody, TabHeader, SectionLabel. FFP-specific data (FF_TABS,
 // FF_UTILITY_TABS, hardcoded scope picker / logo / help items) is

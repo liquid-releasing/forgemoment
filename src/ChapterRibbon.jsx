@@ -1,0 +1,458 @@
+// ChapterRibbon — contextual pathway strip showing where in a long
+// funscript the user is editing right now.
+//
+// The ribbon is **chrome**, not the edit surface. The actual editing
+// happens below it (tone picker, sliders, before/after, etc.). What
+// this component does:
+//
+//   1. Render every band as a time-proportional rectangle on a single
+//      timeline. Each band carries its mini-waveform (canonical velocity
+//      colormap), title, and 3-dot action menu. The selected band gets
+//      a clean white border.
+//
+//   2. Let the user **zoom** (wheel) and **pan** (drag) the viewport
+//      smoothly. Bands stay anchored to their `at_ms`/`end_ms`; only
+//      the viewport changes. Same idiom as a chart timeline. Min zoom
+//      shows the full track; max zoom shows the active band filling
+//      the viewport with slivers of the neighbours visible.
+//
+//   3. Selection is independent of viewport. Click any visible band's
+//      title or frame → that band becomes the active edit-scope.
+//
+// **One layout, no modes.** Earlier iterations tried separate
+// "overview" / "zoomed" modes; the user pushed back, correctly: the
+// zoom math already produces the magnified view as you zoom in. Modes
+// add cognitive load and bugs the zoom math doesn't.
+//
+// Reusable across scopes. Today this drives the Chapters tab on
+// FunscriptForge. Tomorrow the same component drives the Edit tab's
+// phrase selector (within a chapter) and the pattern selector (within
+// a phrase). The vocabulary differs; the component doesn't.
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Icon } from './primitives.jsx';
+import { Sparkline } from './Charts.jsx';
+
+const GREY_TINT = '#6b7280';        // bands without a tone set
+const MIN_BAND_PX = 6;              // hide title/menu when the band is narrower than this
+const MIN_TITLE_PX = 60;            // hide title when the band is narrower than this
+const MAX_ZOOM_PADDING = 0.08;      // 8% of viewport reserved on each side at max zoom
+const WHEEL_ZOOM_SPEED = 0.0015;    // sensitivity of wheel-to-zoom
+
+// Axis chrome. The Y axis is a fixed gutter on the left showing
+// funscript position (0..100); it does not zoom. The X axis is a thin
+// row across the bottom showing time tick labels that update as the
+// viewport pans/zooms.
+const Y_AXIS_PX = 28;
+const X_AXIS_PX = 18;
+
+export function ChapterRibbon({
+  bands,                            // [{ id, at_ms, end_ms, name?, color?, toneColor? }]
+  actions = [],                     // full funscript [{at, pos}] for waveform rendering
+  selectedId,
+  onSelect,                         // (band) => void
+  menu = [],                        // [{ id, label, icon?, onClick, disabled? }]
+  height = 120,                     // total ribbon height
+  // Optional initial viewport. If omitted the ribbon starts full-track.
+  // Pass these to deep-link into a particular zoom/pan state.
+  initialViewStart,
+  initialViewEnd,
+  // Notification when the viewport changes — consumers can mirror this
+  // into a main funscript chart's viewport so the two stay in sync.
+  onViewChange,
+}) {
+  const sortedBands = useMemo(
+    () => [...(bands || [])].sort((a, b) => a.at_ms - b.at_ms),
+    [bands],
+  );
+  const trackStart = sortedBands[0]?.at_ms ?? 0;
+  const trackEnd = sortedBands[sortedBands.length - 1]?.end_ms ?? 0;
+  const trackSpan = Math.max(1, trackEnd - trackStart);
+  const active = sortedBands.find((b) => b.id === selectedId) || sortedBands[0];
+
+  // Viewport state in ms. Default = full track.
+  const [viewStart, setViewStart] = useState(initialViewStart ?? trackStart);
+  const [viewEnd, setViewEnd] = useState(initialViewEnd ?? trackEnd);
+  useEffect(() => {
+    // Track changes (new project, new chapters) reset the viewport to full.
+    setViewStart(trackStart);
+    setViewEnd(trackEnd);
+  }, [trackStart, trackEnd]);
+  useEffect(() => { onViewChange?.({ viewStart, viewEnd }); }, [viewStart, viewEnd, onViewChange]);
+
+  // Max zoom: viewport just fits the active chapter plus slivers of
+  // adjacent context. minSpan is the smallest the viewport can shrink to.
+  // (Slivers come from MAX_ZOOM_PADDING — at this span the active chapter
+  // takes up (1 - 2*padding) of the viewport, with the remaining space
+  // showing the adjacent chapters on each side.)
+  const activeSpan = active ? (active.end_ms - active.at_ms) : trackSpan;
+  const minSpan = Math.max(1, activeSpan / Math.max(0.01, 1 - 2 * MAX_ZOOM_PADDING));
+  const maxSpan = trackSpan;
+
+  // Pixel measurements. ResizeObserver-driven so the ribbon adapts to
+  // the parent container when layout changes (rail width, app window
+  // resize, devtools open, etc.). plotWidth is the band area only —
+  // it excludes the Y-axis gutter on the left.
+  const wrapRef = useRef(null);
+  const [outerWidth, setOuterWidth] = useState(800);
+  useEffect(() => {
+    if (!wrapRef.current) return undefined;
+    const ro = new ResizeObserver(([entry]) => setOuterWidth(entry.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+  const pxWidth = Math.max(1, outerWidth - Y_AXIS_PX);
+
+  const viewSpan = Math.max(1, viewEnd - viewStart);
+  const xFor = (ms) => ((ms - viewStart) / viewSpan) * pxWidth;
+  const msFor = (px) => viewStart + (px / Math.max(1, pxWidth)) * viewSpan;
+
+  // ── Gestures ──────────────────────────────────────────────────────
+  // Wheel zoom: always pivots on the **active chapter's center**, not
+  // the cursor. With the "stay in scope" constraint (active must remain
+  // visible), cursor-pivot would just be the user pushing themselves
+  // out of view and getting yanked back by the clamp. Anchoring on the
+  // active center turns the wheel into a clean "more or less context
+  // around what I'm editing" knob. Selection (clicking another band) is
+  // the only way to change which chapter sits in the center.
+  const handleWheel = (e) => {
+    if (sortedBands.length === 0 || !active) return;
+    e.preventDefault();
+    const pivot = (active.at_ms + active.end_ms) / 2;
+    const factor = Math.exp(e.deltaY * WHEEL_ZOOM_SPEED);
+    let nextSpan = viewSpan * factor;
+    if (nextSpan < minSpan) nextSpan = minSpan;
+    if (nextSpan > maxSpan) nextSpan = maxSpan;
+    let nextStart = pivot - nextSpan / 2;
+    let nextEnd = nextStart + nextSpan;
+    // Clamp to track bounds; this can push the viewport off-center near
+    // the ends of the track, but the active chapter stays visible because
+    // we're zooming around its center.
+    if (nextStart < trackStart) { nextEnd += (trackStart - nextStart); nextStart = trackStart; }
+    if (nextEnd > trackEnd)     { nextStart -= (nextEnd - trackEnd);   nextEnd = trackEnd; }
+    if (nextStart < trackStart)  nextStart = trackStart;
+    if (nextEnd > trackEnd)      nextEnd = trackEnd;
+    setViewStart(nextStart);
+    setViewEnd(nextEnd);
+  };
+
+  // Selection change → snap the viewport to re-center on the new active
+  // chapter. Preserve the current zoom span when possible; if the new
+  // chapter doesn't fit (e.g. selection changed to a much longer chapter
+  // while we were zoomed tight), expand the span just enough to fit it.
+  useEffect(() => {
+    if (!active) return;
+    const pivot = (active.at_ms + active.end_ms) / 2;
+    let span = viewEnd - viewStart;
+    if (span < minSpan) span = minSpan;
+    if (span > maxSpan) span = maxSpan;
+    let nextStart = pivot - span / 2;
+    let nextEnd = nextStart + span;
+    if (nextStart < trackStart) { nextEnd += (trackStart - nextStart); nextStart = trackStart; }
+    if (nextEnd > trackEnd)     { nextStart -= (nextEnd - trackEnd);   nextEnd = trackEnd; }
+    if (nextStart < trackStart)  nextStart = trackStart;
+    if (nextEnd > trackEnd)      nextEnd = trackEnd;
+    setViewStart(nextStart);
+    setViewEnd(nextEnd);
+    // We intentionally exclude viewStart/viewEnd from the deps so
+    // wheeling doesn't re-trigger this effect — it only fires when the
+    // selection or the track bounds change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, trackStart, trackEnd, minSpan, maxSpan]);
+
+  // ── Empty state ──────────────────────────────────────────────────
+  if (sortedBands.length === 0) {
+    return (
+      <div style={{
+        height, background: 'var(--surface-2)',
+        border: '1px solid var(--border)', borderRadius: 8,
+        display: 'grid', placeItems: 'center',
+        fontSize: 12, color: 'var(--text-dim)',
+      }}>no chapters yet</div>
+    );
+  }
+
+  const bandsHeight = height - X_AXIS_PX;
+  const xTicks = useMemo(() => buildXTicks(viewStart, viewEnd, pxWidth), [viewStart, viewEnd, pxWidth]);
+
+  return (
+    <div
+      ref={wrapRef}
+      style={{
+        position: 'relative', height, width: '100%',
+        background: 'var(--bg)', border: '1px solid var(--border)',
+        borderRadius: 8, overflow: 'hidden',
+        userSelect: 'none',
+      }}
+    >
+      {/* Y-axis gutter — fixed, doesn't zoom. Position is 0..100 with
+          top=100 (max) and bottom=0 (rest), matching the funscript
+          convention used by Sparkline inside each band. */}
+      <YAxis height={bandsHeight} />
+
+      {/* Plot area: bands above, X axis below. Wheel attaches here so
+          the gutter doesn't capture zoom gestures. */}
+      <div
+        onWheel={handleWheel}
+        style={{
+          position: 'absolute',
+          left: Y_AXIS_PX, right: 0, top: 0,
+          height,
+        }}
+        title="Wheel to zoom · click a band to focus"
+      >
+        {/* Bands */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: bandsHeight, overflow: 'hidden' }}>
+          {sortedBands.map((band) => {
+            const leftPx = xFor(band.at_ms);
+            const rightPx = xFor(band.end_ms);
+            const widthPx = rightPx - leftPx;
+            if (rightPx < 0 || leftPx > pxWidth) return null;       // clipped off
+            if (widthPx < 1) return null;
+            return (
+              <Band
+                key={band.id}
+                band={band}
+                actions={actions}
+                selected={band.id === active?.id}
+                leftPx={leftPx}
+                widthPx={widthPx}
+                menu={menu}
+                index={sortedBands.findIndex((b) => b.id === band.id)}
+                onSelect={onSelect}
+              />
+            );
+          })}
+        </div>
+
+        {/* X axis */}
+        <XAxis ticks={xTicks} top={bandsHeight} height={X_AXIS_PX} />
+      </div>
+    </div>
+  );
+}
+
+function YAxis({ height }) {
+  // Labels at 100 (top), 50 (mid), 0 (bottom). Position is funscript
+  // depth percentage; fixed across all zoom levels. Tiny tick marks
+  // help the eye when the band waveform is busy.
+  const ticks = [100, 50, 0];
+  return (
+    <div style={{
+      position: 'absolute', left: 0, top: 0, width: Y_AXIS_PX, height,
+      borderRight: '1px solid var(--border)',
+      pointerEvents: 'none',
+    }}>
+      {ticks.map((t) => {
+        const top = ((100 - t) / 100) * height;
+        return (
+          <div key={t} style={{
+            position: 'absolute', right: 4, top: top - 6,
+            fontSize: 9.5, color: 'var(--text-dim)',
+            fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+          }}>{t}</div>
+        );
+      })}
+    </div>
+  );
+}
+
+function XAxis({ ticks, top, height }) {
+  return (
+    <div style={{
+      position: 'absolute', left: 0, right: 0, top, height,
+      borderTop: '1px solid var(--border)',
+      pointerEvents: 'none',
+    }}>
+      {ticks.map((t) => (
+        <div key={`${t.ms}-${t.label}`} style={{
+          position: 'absolute',
+          left: t.x, top: 2,
+          transform: 'translateX(-50%)',
+          fontSize: 9.5, color: 'var(--text-dim)',
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+          whiteSpace: 'nowrap',
+        }}>{t.label}</div>
+      ))}
+    </div>
+  );
+}
+
+// Pick a "nice" tick interval based on the visible time span, then
+// generate evenly-spaced ticks across the viewport. The interval ladder
+// covers everything from 0.5s up to 30min so the axis stays readable
+// across the full zoom range.
+function buildXTicks(viewStart, viewEnd, pxWidth) {
+  const span = Math.max(1, viewEnd - viewStart);
+  const TARGET_TICKS = 6;                      // visual target — pixel width / ~120px per tick
+  const rough = span / TARGET_TICKS;
+  const LADDER_MS = [
+    500, 1000, 2000, 5000, 10_000, 15_000, 30_000,
+    60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
+    60 * 60_000,
+  ];
+  const interval = LADDER_MS.find((v) => v >= rough) || LADDER_MS[LADDER_MS.length - 1];
+  const first = Math.ceil(viewStart / interval) * interval;
+  const ticks = [];
+  for (let ms = first; ms <= viewEnd; ms += interval) {
+    const x = ((ms - viewStart) / span) * pxWidth;
+    ticks.push({ ms, x, label: fmtTickLabel(ms, interval) });
+  }
+  return ticks;
+}
+
+function fmtTickLabel(ms, intervalMs) {
+  // Show MM:SS when the interval is sub-minute or sub-10min material;
+  // switch to HH:MM:SS once we're zoomed out far enough that hours
+  // matter (1 hour+ intervals). Keeps width stable enough to not jitter.
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (intervalMs >= 60 * 60_000 || h > 0) {
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function Band({
+  band, actions, selected, leftPx, widthPx, menu, index, onSelect,
+}) {
+  const tone = band.toneColor || GREY_TINT;
+  const isGrey = !band.toneColor;
+  const bgWash = isGrey ? 'rgba(107,114,128,0.10)' : `${tone}22`;
+  const borderColor = selected ? '#ffffff' : (isGrey ? 'rgba(255,255,255,0.12)' : `${tone}55`);
+  const borderWidth = selected ? 2 : 1;
+
+  const slice = useMemo(
+    () => (actions || []).filter((a) => a.at >= band.at_ms && a.at <= band.end_ms),
+    [actions, band.at_ms, band.end_ms],
+  );
+
+  const showTitle = widthPx >= MIN_TITLE_PX;
+  const showMenu = widthPx >= MIN_BAND_PX * 4;
+
+  return (
+    <div
+      onClick={() => onSelect?.(band)}
+      title={band.name || band.id}
+      style={{
+        position: 'absolute',
+        left: leftPx, top: 0, width: widthPx, height: '100%',
+        background: bgWash,
+        border: `${borderWidth}px solid ${borderColor}`,
+        borderRadius: 6,
+        overflow: 'hidden',
+        cursor: 'pointer',
+        opacity: selected ? 1 : 0.85,
+        boxSizing: 'border-box',
+      }}
+    >
+      {/* Waveform fills the band's interior. Sparkline auto-sizes to its
+          container, so it adapts as the viewport zooms. */}
+      <div style={{ position: 'absolute', inset: 4 }}>
+        <Sparkline
+          actions={slice}
+          start={band.at_ms}
+          end={band.end_ms}
+          colorMode="velocity"
+          height="100%"
+          filled
+        />
+      </div>
+
+      {showTitle && (
+        <div style={{
+          position: 'absolute', top: 4, left: 8, right: 30,
+          fontSize: 11.5, fontWeight: 700,
+          color: isGrey ? 'var(--text-muted)' : tone,
+          textShadow: '0 0 4px rgba(0,0,0,0.55)',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          pointerEvents: 'none',
+        }}>
+          {band.name || band.id}
+        </div>
+      )}
+
+      {showMenu && menu && menu.length > 0 && (
+        <BandMenu band={band} menu={menu} index={index} />
+      )}
+    </div>
+  );
+}
+
+function BandMenu({ band, menu, index }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: 'absolute', top: 3, right: 3 }}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((s) => !s); }}
+        onMouseDown={(e) => e.stopPropagation()}
+        title="Band actions"
+        aria-label="Band actions"
+        style={{
+          width: 22, height: 22, borderRadius: 5,
+          background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.15)',
+          color: 'var(--text)', cursor: 'pointer', fontFamily: 'inherit',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        <Icon name="more-horizontal" size={12} />
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute', top: 26, right: 0, minWidth: 200,
+            background: 'var(--surface-2)', border: '1px solid var(--border)',
+            borderRadius: 8, boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+            padding: 4, zIndex: 30,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {menu.map((item) => {
+            const disabled = item.disabled ? item.disabled(band, index) : false;
+            return (
+              <button
+                key={item.id}
+                onClick={() => {
+                  if (disabled) return;
+                  item.onClick?.(band, index);
+                  setOpen(false);
+                }}
+                disabled={disabled}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  width: '100%', padding: '8px 10px',
+                  background: 'transparent', border: 'none',
+                  color: disabled ? 'var(--text-dim)' : 'var(--text)',
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  borderRadius: 5, fontFamily: 'inherit', fontSize: 12.5,
+                  textAlign: 'left',
+                }}
+                onMouseEnter={(e) => {
+                  if (!disabled) e.currentTarget.style.background = 'var(--surface)';
+                }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                {item.icon && <Icon name={item.icon} size={13} />}
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -421,8 +421,16 @@ export function ScriptChart({
   );
 }
 
-// ─── ChapterStrip (NEW) ────────────────────────────────────────────
+// ─── ChapterStrip (DEPRECATED 2026-05-16) ──────────────────────────
 //
+// **Superseded by `ChapterRibbon`** (forgemoment/src/ChapterRibbon.jsx).
+// New consumers should use ChapterRibbon — it carries the per-band
+// waveform + tone tint + 3-dot menu + active/peek carousel layout.
+// ChapterStrip remains here for Library card thumbnails and other places
+// that want a thin, time-proportional click-to-select strip without the
+// heavier rendering. Will be removed once no consumer references it.
+//
+// Original rationale (kept for context):
 // Net-new for forgemoment v0.0.2. Iter 08's Charts.jsx didn't expose a
 // chapter strip; forgegen invented one locally in
 // `tauri/src/components/analysis/ChapterStrip.jsx`. Promoting the shape

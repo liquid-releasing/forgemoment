@@ -17,8 +17,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AcceptBar, BpmBandChart, Button, Card, ChapterStrip, DiffSparkline,
-  Field, HoldSeekButton, MediaViewer, MiniWave, PhraseDetailZoomChart,
+  AcceptBar, BpmBandChart, Button, Card, ChapterRibbon, ChapterStrip,
+  DiffSparkline, Field, HoldSeekButton, MediaViewer, MiniWave,
+  PhraseDetailZoomChart,
   Pill, PreviewChart, ScopePicker, ScopePlayer, ScriptChart,
   SectionLabel, Segmented, Slider, Sparkline, StatusBar, TabBody,
   TabHeader, TabStrip, TextInput, TopBar, TransformPanel, fmtTime,
@@ -60,6 +61,7 @@ const FAKE_PHRASES = [
 
 const TABS = [
   { id: 'viewer',     label: 'Viewer',     icon: 'film',     pipeline: 'viewer'     },
+  { id: 'ribbon',     label: 'Ribbon',     icon: 'bookmark', pipeline: 'ribbon'     },
   { id: 'curve',      label: 'Curve',      icon: 'activity', pipeline: 'curve'      },
   { id: 'transform',  label: 'Transform',  icon: 'sliders',  pipeline: 'transform'  },
   { id: 'primitives', label: 'Primitives', icon: 'layers',   pipeline: 'primitives' },
@@ -284,6 +286,13 @@ export function App() {
             viewerChapter={viewerChapter} scopedChapter={scopedChapter}
           />
         )}
+        {activeTab === 'ribbon' && (
+          <RibbonTab
+            chapters={chapters}
+            scopedChapterId={scopedChapterId}
+            setScopedChapterId={setScopedChapterId}
+          />
+        )}
         {activeTab === 'curve' && (
           <CurveTab
             currentMs={currentMs} setCurrentMs={setCurrentMs}
@@ -424,6 +433,99 @@ function ViewerTab({
       </Card>
     </>
   );
+}
+
+// RibbonTab — dogfood the new ChapterRibbon component in isolation.
+// Drives off the same `chapters` state the Viewer tab uses, so switching
+// between Viewer and Ribbon keeps the same selection (proves the
+// component is a drop-in for any scoped-band selector). Adds a small
+// "tone tint" control row that flips per-chapter `toneColor` so you can
+// see the band wash + title color change live; a band with no tone set
+// renders in grey.
+function RibbonTab({ chapters, scopedChapterId, setScopedChapterId }) {
+  const [tonesByChapter, setTonesByChapter] = useState({});  // { chapterId: toneColor }
+  const TONE_OPTIONS = [
+    { id: 'tender',   label: 'Tender',   color: '#8b9bff' },
+    { id: 'build',    label: 'Build',    color: '#4dabf7' },
+    { id: 'tease',    label: 'Tease',    color: '#c77dff' },
+    { id: 'edge',     label: 'Edge',     color: '#ffb547' },
+    { id: 'climax',   label: 'Climax',   color: '#ff5470' },
+    { id: 'dominant', label: 'Dominant', color: '#ff8c47' },
+  ];
+  const activeId = scopedChapterId || chapters[0]?.id;
+  const activeTone = tonesByChapter[activeId];
+  return (
+    <>
+      <TabHeader
+        eyebrow="Ribbon"
+        title="Scope-aware band selector with per-band waveform + tone tint"
+        subtitle="Click a band's title or frame to select it. The active band carries the waveform; peeks left and right are click-to-jump navigation. 3-dot menu offers the per-band edit actions — wired to console.log here. Set a tone below to tint the band; grey = no tone."
+      />
+
+      <Card style={{ padding: 18, marginBottom: 16 }}>
+        <ChapterRibbon
+          bands={chapters.map((c) => ({
+            id: c.id,
+            at_ms: c.at_ms,
+            end_ms: c.end_ms,
+            name: c.name,
+            color: c.color,
+            toneColor: tonesByChapter[c.id],
+          }))}
+          actions={FAKE_FUNSCRIPT.actions}
+          selectedId={activeId}
+          onSelect={(band) => setScopedChapterId(band.id)}
+          menu={[
+            { id: 'split', label: 'Split at playhead', icon: 'scissors',
+              onClick: (b) => console.log('[ribbon] split', b.id) },
+            { id: 'join-prev', label: 'Join with previous', icon: 'corner-up-left',
+              onClick: (b) => console.log('[ribbon] join-prev', b.id),
+              disabled: (_b, i) => i <= 0 },
+            { id: 'join-next', label: 'Join with next', icon: 'corner-up-right',
+              onClick: (b) => console.log('[ribbon] join-next', b.id),
+              disabled: (_b, i) => i >= chapters.length - 1 },
+          ]}
+          height={200}
+        />
+      </Card>
+
+      <Card style={{ padding: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                      marginBottom: 10 }}>
+          Tone for {chapters.find((c) => c.id === activeId)?.name || activeId}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <button
+            onClick={() => setTonesByChapter((s) => {
+              const next = { ...s }; delete next[activeId]; return next;
+            })}
+            style={pickerButtonStyle(!activeTone, '#6b7280')}>
+            none (grey)
+          </button>
+          {TONE_OPTIONS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTonesByChapter((s) => ({ ...s, [activeId]: t.color }))}
+              style={pickerButtonStyle(activeTone === t.color, t.color)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function pickerButtonStyle(selected, color) {
+  return {
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    padding: '6px 12px', fontSize: 12, fontWeight: 700,
+    background: selected ? `${color}22` : 'var(--surface)',
+    border: `1.5px solid ${selected ? color : 'var(--border)'}`,
+    color: selected ? color : 'var(--text)',
+    borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+  };
 }
 
 function CurveTab({

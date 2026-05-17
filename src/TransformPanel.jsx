@@ -34,7 +34,7 @@
 //   picked a different transform, a small "Use suggested" link appears.
 
 import { useMemo } from 'react';
-import { Button, Icon } from './primitives.jsx';
+import { Button, Icon, Pill } from './primitives.jsx';
 import { SectionLabel } from './AppShell.jsx';
 
 const DEFAULT_CATEGORIES = [
@@ -58,6 +58,13 @@ export function TransformPanel({
   applyLabel = 'Apply',
   cancelLabel = 'Cancel',
   onApply, onCancel,
+  // Affected-count chip rendered in the header (small Pill next to the
+  // "Transform" eyebrow). Pass the number of units the apply will hit
+  // (instances on the Patterns tab, phrases on Phrases). When null /
+  // undefined, the chip is suppressed entirely so non-multi-edit
+  // consumers stay clean. The chip composes itself: "N affected ·
+  // transform <label>" (or "transform TBD" when no transform picked).
+  affected,
   // Layout
   width = 360,
   hideHeader = false,
@@ -104,10 +111,21 @@ export function TransformPanel({
       {!hideHeader && (
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
           <div style={{
-            fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
-            textTransform: 'uppercase', letterSpacing: '0.08em',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 10,
           }}>
-            Transform
+            <div style={{
+              fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
+              textTransform: 'uppercase', letterSpacing: '0.08em',
+            }}>
+              Transform
+            </div>
+            {typeof affected === 'number' && (
+              <Pill tone="accent">
+                <Icon name="target" size={11} style={{ marginRight: 4 }} />
+                {affected} affected · {tx ? tx.label : 'transform TBD'}
+              </Pill>
+            )}
           </div>
           <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
             {tx ? tx.label : 'Select a transform'}

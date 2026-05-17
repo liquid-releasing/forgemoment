@@ -75,3 +75,10 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+
+/* Indeterminate progress stripe used by AcceptBar.busy when no
+ * fraction is provided. Slides a 40%-wide bar across the track. */
+@keyframes ff-busy-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}

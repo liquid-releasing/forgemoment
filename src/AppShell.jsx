@@ -376,35 +376,154 @@ export function StatusBar({ synced = true, scope, chainFile, version }) {
 export function AcceptBar({
   summary, chainFile, accepted, onAccept, onReset,
   primaryLabel = 'Accept and chain',
+  // Footer-level error + progress + gate. Surface issues, long-running
+  // ops, and chain-blockers where the user is always looking (the
+  // AcceptBar is sticky-bottom). Each disables the primary Accept
+  // button so the user can't chain forward while something is
+  // unresolved.
+  //
+  //   error  : string | null
+  //              dismissible red banner; pair with onClearError.
+  //   busy   : { message: string, fraction?: number } | null
+  //              fraction omitted = indeterminate (animated stripe).
+  //   gate   : string | null
+  //              undismissible amber warning banner. Use for "you must
+  //              do X before continuing" — clears itself when the
+  //              consumer recomputes its gate.
+  //   ready  : bool — leading-icon hint. true → green check (chain is
+  //              clear); false → info dot. Ignored when accepted/gate/
+  //              error/busy are set (those have stronger icons).
+  //   onClearError : () => void
+  error,
+  busy,
+  gate,
+  ready,
+  onClearError,
 }) {
+  const disabled = Boolean(error) || Boolean(busy) || Boolean(gate);
+  // Icon precedence: accepted (post-action success) > gate (blocker) >
+  // error (existing banner already shows alert-circle, info row stays
+  // info) > ready (pre-action go-ahead) > default info dot.
+  let leadIcon = 'info';
+  let leadColor = 'var(--text-dim)';
+  if (accepted) {
+    leadIcon = 'check';
+    leadColor = 'var(--success)';
+  } else if (gate) {
+    leadIcon = 'alert-triangle';
+    leadColor = 'var(--warning, #f59f00)';
+  } else if (ready) {
+    leadIcon = 'check';
+    leadColor = 'var(--success)';
+  }
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 14,
-      padding: '12px 22px', background: 'var(--surface)',
+      display: 'flex', flexDirection: 'column',
+      background: 'var(--surface)',
       borderTop: '1px solid var(--border)', flexShrink: 0,
     }}>
-      <Icon
-        name={accepted ? 'check' : 'info'}
-        size={16}
-        style={{ color: accepted ? 'var(--success)' : 'var(--text-dim)' }}
-      />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', lineHeight: 1.3 }}>
-        <span style={{ fontSize: 12, color: 'var(--text)' }}>{summary}</span>
-        {chainFile && (
-          <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-            writes <span style={{ color: 'var(--accent-2, #ff7b7b)' }}>{chainFile}</span> · downstream tabs read this file
-          </span>
-        )}
+      {error && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '8px 22px',
+          background: 'rgba(255,75,75,0.10)',
+          borderBottom: '1px solid rgba(255,75,75,0.30)',
+          color: 'var(--accent-2, #ff7b7b)', fontSize: 12.5,
+        }}>
+          <Icon name="alert-circle" size={14} />
+          <span style={{ flex: 1 }}>{error}</span>
+          {onClearError && (
+            <button
+              onClick={onClearError}
+              aria-label="Dismiss error"
+              title="Dismiss"
+              style={{
+                background: 'transparent', border: 'none',
+                color: 'inherit', cursor: 'pointer', padding: 2,
+                display: 'inline-flex', alignItems: 'center',
+              }}
+            >
+              <Icon name="x" size={14} />
+            </button>
+          )}
+        </div>
+      )}
+      {gate && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '8px 22px',
+          background: 'rgba(245,159,0,0.10)',
+          borderBottom: '1px solid rgba(245,159,0,0.30)',
+          color: 'var(--warning, #f59f00)', fontSize: 12.5, fontWeight: 600,
+        }}>
+          <Icon name="alert-triangle" size={14} />
+          <span style={{ flex: 1 }}>{gate}</span>
+        </div>
+      )}
+      {busy && (
+        <div style={{ position: 'relative', borderBottom: '1px solid var(--border)' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 22px',
+            color: 'var(--text)', fontSize: 12.5,
+          }}>
+            <Icon name="activity" size={14} style={{ color: 'var(--accent-2, #ff7b7b)' }} />
+            <span style={{ flex: 1 }}>{busy.message || 'Working…'}</span>
+            {typeof busy.fraction === 'number' && (
+              <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                {Math.round(Math.max(0, Math.min(1, busy.fraction)) * 100)}%
+              </span>
+            )}
+          </div>
+          <div style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0,
+            height: 3, background: 'var(--surface-2)', overflow: 'hidden',
+          }}>
+            {typeof busy.fraction === 'number' ? (
+              <div style={{
+                height: '100%',
+                width: `${Math.max(0, Math.min(1, busy.fraction)) * 100}%`,
+                background: 'var(--accent-2, #ff7b7b)',
+                transition: 'width 200ms ease-out',
+              }} />
+            ) : (
+              <div style={{
+                height: '100%', width: '40%',
+                background: 'var(--accent-2, #ff7b7b)',
+                animation: 'ff-busy-slide 1.2s linear infinite',
+              }} />
+            )}
+          </div>
+        </div>
+      )}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 14,
+        padding: '12px 22px',
+      }}>
+        <Icon
+          name={leadIcon}
+          size={16}
+          style={{ color: leadColor }}
+        />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', lineHeight: 1.3 }}>
+          <span style={{ fontSize: 12, color: 'var(--text)' }}>{summary}</span>
+          {chainFile && (
+            <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              writes <span style={{ color: 'var(--accent-2, #ff7b7b)' }}>{chainFile}</span> · downstream tabs read this file
+            </span>
+          )}
+        </div>
+        {accepted && <Pill tone="success" dot>Accepted</Pill>}
+        <Button kind="ghost" size="sm" onClick={onReset}>Reset</Button>
+        <Button
+          kind={accepted ? 'secondary' : 'primary'}
+          icon={accepted ? 'rotate-ccw' : 'check'}
+          onClick={onAccept}
+          disabled={disabled}
+        >
+          {accepted ? 'Re-accept' : primaryLabel}
+        </Button>
       </div>
-      {accepted && <Pill tone="success" dot>Accepted</Pill>}
-      <Button kind="ghost" size="sm" onClick={onReset}>Reset</Button>
-      <Button
-        kind={accepted ? 'secondary' : 'primary'}
-        icon={accepted ? 'rotate-ccw' : 'check'}
-        onClick={onAccept}
-      >
-        {accepted ? 'Re-accept' : primaryLabel}
-      </Button>
     </div>
   );
 }

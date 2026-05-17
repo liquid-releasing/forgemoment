@@ -375,7 +375,11 @@ function Band({
         borderRadius: 6,
         overflow: 'hidden',
         cursor: 'pointer',
-        opacity: selected ? 1 : 0.85,
+        // Selected chapter stays at full opacity; others subdue noticeably
+        // so the active one reads as the focus. Earlier value (0.85) was
+        // too close to 1 — the dim was nearly invisible (user flagged
+        // 2026-05-17). 0.55 matches the patterns strip's wash convention.
+        opacity: selected ? 1 : 0.55,
         boxSizing: 'border-box',
       }}
     >

@@ -324,6 +324,60 @@ function HelpMenu({ items }) {
   );
 }
 
+// ─── ProgressBar ───────────────────────────────────────────────────
+//
+// Edge-to-edge progress affordance. Two render modes:
+//   - determinate    — pass `fraction` ∈ [0,1]; bar fills proportionally
+//   - indeterminate  — omit `fraction`; sliding stripe via the
+//                      ff-busy-slide keyframe in tokens.css
+//
+// `absolutePin` (default false) positions the bar absolutely at the
+// bottom edge of its nearest positioned ancestor — used inside the
+// AcceptBar busy banner so the bar visually anchors the banner's lower
+// border. Standalone consumers (any tab, app-wide loader, etc.) leave
+// the prop off and get a normal block element that lays out inline.
+//
+// `height` tunes the bar thickness (default 6px — readable, not bulky).
+// `tone` is the accent color; defaults to var(--accent-2).
+//
+// Props:
+//   fraction      number|undefined  determinate progress 0..1; omit for indeterminate
+//   height        number            bar thickness in px (default 6)
+//   tone          string            CSS color for the moving bar
+//   absolutePin   bool              absolutely-position to bottom edge
+export function ProgressBar({
+  fraction,
+  height = 6,
+  tone = 'var(--accent-2, #ff7b7b)',
+  absolutePin = false,
+}) {
+  const determinate = typeof fraction === 'number';
+  const trackStyle = absolutePin
+    ? { position: 'absolute', left: 0, right: 0, bottom: 0 }
+    : { position: 'relative', width: '100%' };
+  return (
+    <div style={{
+      ...trackStyle,
+      height, background: 'var(--surface-2)', overflow: 'hidden',
+    }}>
+      {determinate ? (
+        <div style={{
+          height: '100%',
+          width: `${Math.max(0, Math.min(1, fraction)) * 100}%`,
+          background: tone,
+          transition: 'width 200ms ease-out',
+        }} />
+      ) : (
+        <div style={{
+          height: '100%', width: '40%',
+          background: tone,
+          animation: 'ff-busy-slide 1.2s linear infinite',
+        }} />
+      )}
+    </div>
+  );
+}
+
 // ─── StatusBar ─────────────────────────────────────────────────────
 //
 // Bottom strip. Sync indicator, scope hint, chain-file hint, version
@@ -384,8 +438,10 @@ export function AcceptBar({
   //
   //   error  : string | null
   //              dismissible red banner; pair with onClearError.
-  //   busy   : { message: string, fraction?: number } | null
-  //              fraction omitted = indeterminate (animated stripe).
+  //   busy   : { message: string, fraction?: number, onCancel?: () => void } | null
+  //              fraction omitted = indeterminate (animated stripe);
+  //              onCancel set → render a Cancel button inside the banner
+  //              that lets the user bail out and pick a different option.
   //   gate   : string | null
   //              undismissible amber warning banner. Use for "you must
   //              do X before continuing" — clears itself when the
@@ -474,26 +530,69 @@ export function AcceptBar({
                 {Math.round(Math.max(0, Math.min(1, busy.fraction)) * 100)}%
               </span>
             )}
-          </div>
-          <div style={{
-            position: 'absolute', left: 0, right: 0, bottom: 0,
-            height: 3, background: 'var(--surface-2)', overflow: 'hidden',
-          }}>
-            {typeof busy.fraction === 'number' ? (
-              <div style={{
-                height: '100%',
-                width: `${Math.max(0, Math.min(1, busy.fraction)) * 100}%`,
-                background: 'var(--accent-2, #ff7b7b)',
-                transition: 'width 200ms ease-out',
-              }} />
-            ) : (
-              <div style={{
-                height: '100%', width: '40%',
-                background: 'var(--accent-2, #ff7b7b)',
-                animation: 'ff-busy-slide 1.2s linear infinite',
-              }} />
+            {typeof busy.onCancel === 'function' && (
+              <button
+                onClick={busy.onCancel}
+                title="Cancel and go back to your choices"
+                aria-label="Cancel"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 9px', borderRadius: 5,
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-dim)',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 11, fontWeight: 600,
+                }}
+              >
+                <Icon name="x" size={11} />
+                Cancel
+              </button>
             )}
           </div>
+          {Array.isArray(busy.steps) && busy.steps.length > 0 && (
+            <div style={{
+              padding: '0 22px 10px',
+              display: 'flex', flexDirection: 'column', gap: 3,
+            }}>
+              {busy.steps.map((s) => (
+                <div
+                  key={s.label}
+                  style={{
+                    display: 'flex', alignItems: 'baseline', gap: 6,
+                    fontSize: 11.5,
+                    color: s.status === 'running' ? 'var(--text)' : 'var(--text-dim)',
+                    fontWeight: s.status === 'running' ? 600 : 400,
+                  }}
+                >
+                  <Icon
+                    name={
+                      s.status === 'done' ? 'check'
+                        : s.status === 'running' ? 'activity'
+                          : 'circle'
+                    }
+                    size={11}
+                    style={{
+                      color: s.status === 'done' ? 'var(--success)'
+                        : s.status === 'running' ? 'var(--accent-2, #ff7b7b)'
+                          : 'var(--text-dim)',
+                      transform: 'translateY(2px)',
+                    }}
+                  />
+                  <span>{s.label}</span>
+                  {s.summary && s.status === 'done' && (
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                      — {s.summary}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <ProgressBar
+            fraction={typeof busy.fraction === 'number' ? busy.fraction : undefined}
+            absolutePin
+          />
         </div>
       )}
       <div style={{

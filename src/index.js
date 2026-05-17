@@ -38,6 +38,7 @@ export { PatternRibbon } from './PatternRibbon.jsx';
 // consumer-owned via props — never hardcoded in the library.
 export {
   AcceptBar,
+  ProgressBar,
   ScopePicker,
   SectionLabel,
   StatusBar,

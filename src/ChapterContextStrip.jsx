@@ -37,6 +37,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Sparkline } from './Charts.jsx';
 import { Icon } from './primitives.jsx';
+import { MediaViewer } from './MediaViewer.jsx';
 
 export function ChapterContextStrip({
   chapter,                  // { at_ms, end_ms }
@@ -48,7 +49,19 @@ export function ChapterContextStrip({
   header,                   // JSX — left side of the header row
   headerExtra,              // JSX — extra rows under the header (only rendered when expanded)
   currentMs = null,
-  onSeek,                   // (ms) => void — click on empty waveform background
+  onSeek,                   // (ms) => void — explicit user seek (waveform click, viewer scrub)
+  onTimeChange,             // (ms) => void — high-frequency clock tick from MediaViewer playback. Falls back to onSeek when not provided.
+  // ── Media viewer (optional) ────────────────────────────────────────
+  // Pass a `media` object to render a compact MediaViewer to the right
+  // of the waveform. The viewer becomes the master clock for this
+  // strip — its onTimeChange / onPlayPause / onSeek emit signals the
+  // tab forwards back as `currentMs` / `isPlaying` / `onSeek` props.
+  // When `media` is absent the strip renders as before (waveform fills
+  // the full width). The shared "side MediaViewer + synced baton"
+  // unlock described in project_chapter_context_strip.md.
+  media = null,             // { src, kind: 'video'|'audio', title? } | null
+  isPlaying = false,
+  onPlayPause,
   height = 96,
 }) {
   return (
@@ -84,7 +97,15 @@ export function ChapterContextStrip({
       {expanded && headerExtra && <div>{headerExtra}</div>}
 
       {expanded && (
-        <div style={{ marginTop: 10 }}>
+        <div style={{
+          marginTop: 10,
+          display: media?.src ? 'grid' : 'block',
+          // Viewer on the right (~300px) when media is present; waveform
+          // takes the remaining space. Single column otherwise.
+          gridTemplateColumns: media?.src ? 'minmax(360px, 1fr) 300px' : undefined,
+          gap: media?.src ? 14 : 0,
+          alignItems: 'stretch',
+        }}>
           <StripBody
             chapter={chapter}
             actions={actions}
@@ -94,6 +115,27 @@ export function ChapterContextStrip({
             onSeek={onSeek}
             height={height}
           />
+          {media?.src && (
+            <MediaViewer
+              media={{ kind: media.kind || 'video', title: media.title }}
+              videoSrc={media.kind === 'video' || !media.kind ? media.src : undefined}
+              chapter={{
+                id: 'strip',
+                title: media.title || '',
+                color: '#4dabf7',
+                start: chapter.at_ms,
+                end: chapter.end_ms,
+              }}
+              currentMs={currentMs ?? chapter.at_ms}
+              isPlaying={isPlaying}
+              onPlayPause={onPlayPause}
+              onSeek={onSeek}
+              onTimeChange={onTimeChange ?? onSeek}
+              showMark={false}
+              showModeToggle={false}
+              height={height}
+            />
+          )}
         </div>
       )}
     </div>

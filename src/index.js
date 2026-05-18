@@ -16,6 +16,7 @@ export {
   SectionHeading,
   fmtTime,
   fmtTimeShort,
+  fmtDurationMs,
 } from './primitives.jsx';
 
 export { HoldSeekButton } from './HoldSeekButton.jsx';
@@ -31,6 +32,11 @@ export { ChapterRibbon } from './ChapterRibbon.jsx';
 // active chapter. Thinner sibling of ChapterRibbon: mono bands, no wave
 // inside (signal lives in the center FunscriptChart pairs), no zoom.
 export { PatternRibbon } from './PatternRibbon.jsx';
+
+// ChapterContextStrip — chapter-scoped velocity waveform with overlaid
+// clickable bands. Shared across editing tabs that scope to one chapter
+// (Patterns: instances; Phrases: phrases; future Beats: beats).
+export { ChapterContextStrip } from './ChapterContextStrip.jsx';
 
 // AppShell — TopBar, TabStrip, StatusBar, AcceptBar, ScopePicker,
 // TabBody, TabHeader, SectionLabel. FFP-specific data (FF_TABS,

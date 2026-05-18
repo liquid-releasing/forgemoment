@@ -303,6 +303,21 @@ export function fmtTime(ms) {
   return `${String(m).padStart(2, '0')}:${sec.toFixed(2).padStart(5, '0')}`;
 }
 
+// fmtDurationMs is fmtTime's sibling for *lengths* (not timestamps).
+// Sub-minute spans render with one decimal second ("18.0s") so users
+// can read the slim difference between e.g. 4.3s and 6.2s phrases;
+// once you're over a minute the decimal drops and it falls back to m:ss.
+export function fmtDurationMs(ms) {
+  const total = Math.max(0, ms ?? 0);
+  if (total < 60_000) {
+    return `${(total / 1000).toFixed(1)}s`;
+  }
+  const s = Math.floor(total / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
 export function fmtTimeShort(ms) {
   const s = Math.max(0, ms / 1000);
   const m = Math.floor(s / 60);

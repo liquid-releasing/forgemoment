@@ -129,6 +129,15 @@ export function MediaViewer({
   // Hide the corner "VIDEO" / "AUDIO" / "FUNSCRIPT" mode label. Redundant
   // with the visible toggle in most contexts; the Chapters tab opts it out.
   showModeLabel = true,
+  // Thumbnail aspect ratio. When set (CSS aspect-ratio value like '16/9'),
+  // the thumbnail area uses `aspect-ratio` instead of flex-fill — total
+  // viewer height becomes chrome + thumbnail-by-aspect. Default null
+  // keeps the legacy flex:1 behaviour so existing callers (which pin
+  // `height` and let the thumbnail grow into the leftover) aren't
+  // affected. With `objectFit: contain` on the video, the whole frame
+  // is always visible inside the aspect-shaped box; any leftover space
+  // letterboxes against the surface background.
+  thumbnailAspect = null,
   // Transport controls — declared list rendered in order. Each entry is one
   // of: 'prev' | 'frame-back' | 'back5' | 'play' | 'forward5' |
   // 'frame-forward' | 'next'. The play button is always rendered with the
@@ -178,27 +187,56 @@ export function MediaViewer({
 
   // ── Video element wiring ────────────────────────────────────────
   // The <video> element is rendered with just a src by default; without
-  // ref-based control it plays nothing. These three effects bind the
-  // element to the consumer's props so the viewer's chrome (play
-  // button, baton, scrub, mode toggle, transport) drives real playback.
+  // ref-based control it plays nothing. These effects bind the element
+  // to the consumer's props so the viewer's chrome (play button, baton,
+  // scrub, mode toggle, transport) drives real playback.
   const videoRef = useRef(null);
+  // Mirror `isPlaying` into a ref so deferred-play handlers (below) can
+  // read the *current* user intent without re-subscribing every render.
+  const isPlayingRef = useRef(isPlaying);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  // `pendingPlayRef` is set whenever we *wanted* to play but couldn't
+  // yet (readyState too low after a cold seek, or a `waiting` stall
+  // mid-playback). The buffer-readiness handler picks this up and
+  // promotes it to an actual v.play() once the decoder has enough data.
+  // Single flag handles both the "user clicks play right after seek"
+  // and "playback stalled" cases — they both reduce to "user intends
+  // to play, video isn't ready yet, resume when it is."
+  const pendingPlayRef = useRef(false);
 
   // Play / pause sync. video.play() returns a Promise that rejects on
   // autoplay block, codec failure, decode error, etc. We log the
   // rejection rather than swallow it — silent rejection is what made
   // "no sound" hard to diagnose during the first dogfood pass
-  // (2026-05-19). Pause is synchronous.
+  // (2026-05-19).
+  //
+  // Buffer gate (2026-05-20): on big high-bitrate sources (the user's
+  // 18GB Angel Anjelica file, etc.) a chapter jump lands in a cold
+  // buffer region. Calling v.play() immediately makes Chromium push
+  // partial frames before the decoder catches up, producing the choppy
+  // first few seconds the user flagged. So we only call play() when
+  // readyState is HAVE_ENOUGH_DATA (4). If it isn't, we mark
+  // `pendingPlayRef` and let the buffer-readiness handler below promote
+  // the deferred intent to a real play() once data is ready. Pause is
+  // synchronous and always honoured immediately.
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !videoSrc) return;
     if (isPlaying) {
-      const p = v.play();
-      if (p && typeof p.catch === 'function') {
-        p.catch((err) => {
-          console.warn('MediaViewer: video.play() rejected', err?.name, err?.message);
-        });
+      if (v.readyState >= 4 /* HAVE_ENOUGH_DATA */) {
+        pendingPlayRef.current = false;
+        const p = v.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch((err) => {
+            console.warn('MediaViewer: video.play() rejected', err?.name, err?.message);
+          });
+        }
+      } else {
+        // Defer — the buffer-readiness handler below will pick this up.
+        pendingPlayRef.current = true;
       }
     } else {
+      pendingPlayRef.current = false;
       v.pause();
     }
   }, [isPlaying, videoSrc]);
@@ -237,6 +275,71 @@ export function MediaViewer({
     v.addEventListener('timeupdate', handler);
     return () => v.removeEventListener('timeupdate', handler);
   }, [onTimeChange]);
+
+  // Buffer-pause + deferred-play promoter. Two paths into the same
+  // resume logic:
+  //
+  //   (a) Mid-playback stall: video fires `waiting` when the decoder
+  //       runs out of buffered data. Chromium would otherwise try to
+  //       resume the instant new bytes arrive, producing the burpy
+  //       "almost playing" frames the user flagged on long videos.
+  //       We catch `waiting`, explicitly pause, and set pendingPlayRef
+  //       so the readiness handler resumes when there's *real* data.
+  //
+  //   (b) Cold-seek into a new region: the user clicks a chapter band
+  //       (or presses play after a seek). The play/pause effect above
+  //       sees readyState < HAVE_ENOUGH_DATA, doesn't call v.play(),
+  //       sets pendingPlayRef. The readiness handler picks it up.
+  //
+  // Both paths gate on `readyState >= HAVE_ENOUGH_DATA` (4) — *not*
+  // `canplay`'s readyState 3 (HAVE_FUTURE_DATA). On big high-bitrate
+  // sources (Angel Anjelica 18GB), Chromium reports HAVE_FUTURE_DATA
+  // with just a frame or two of decoded buffer, and resuming there is
+  // exactly what made playback choppy. canplaythrough fires when the
+  // browser estimates it can play through without stalling — for cold
+  // seeks on local files that's usually a couple seconds of decoded
+  // headroom, which is what we want. We listen on `canplay`,
+  // `canplaythrough`, and `playing` (catch-all for "decoder is alive")
+  // but every handler checks readyState before resuming.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) return undefined;
+    const onWaiting = () => {
+      pendingPlayRef.current = true;
+      if (!v.paused) {
+        try { v.pause(); } catch { /* swallow */ }
+      }
+    };
+    const tryResume = () => {
+      if (!pendingPlayRef.current) return;
+      // The crucial readyState gate. Don't resume until there's enough
+      // decoded buffer for smooth playback — anything less produces the
+      // choppy partial-frame playback the user saw on chapter jumps.
+      if (v.readyState < 4 /* HAVE_ENOUGH_DATA */) return;
+      if (!isPlayingRef.current) {
+        // User changed their mind while we were buffering — drop intent.
+        pendingPlayRef.current = false;
+        return;
+      }
+      pendingPlayRef.current = false;
+      if (v.paused) {
+        const p = v.play();
+        if (p && typeof p.catch === 'function') p.catch(() => { /* swallow */ });
+      }
+    };
+    v.addEventListener('waiting', onWaiting);
+    v.addEventListener('canplay', tryResume);
+    v.addEventListener('canplaythrough', tryResume);
+    v.addEventListener('playing', tryResume);
+    v.addEventListener('loadeddata', tryResume);
+    return () => {
+      v.removeEventListener('waiting', onWaiting);
+      v.removeEventListener('canplay', tryResume);
+      v.removeEventListener('canplaythrough', tryResume);
+      v.removeEventListener('playing', tryResume);
+      v.removeEventListener('loadeddata', tryResume);
+    };
+  }, [videoSrc]);
 
   // Back-compat: callers may still pass onPrevChapter/onNextChapter.
   const prev = onPrev ?? onPrevChapter;
@@ -279,8 +382,18 @@ export function MediaViewer({
     onSeek?.(Math.min(cap, (currentMs || 0) + 5000));
   };
 
+  // Absorb wheel events so they don't fall through to the surrounding
+  // page scroll. User flagged 2026-05-20 that wheeling over the viewer
+  // scrolls the editor's outer page instead of doing nothing — the
+  // viewer is a media surface, not a scroll target. No zoom action
+  // here; just block the bubble. (The chart panels under the viewer
+  // own their own wheel-zoom; this is only for the media surface.)
+  const handleWheelAbsorb = (e) => { e.preventDefault(); };
+
   return (
-    <div style={{
+    <div
+      onWheel={handleWheelAbsorb}
+      style={{
       width, height, flexShrink: 0,
       background: 'var(--surface)',
       border: '1px solid var(--border)',
@@ -314,10 +427,16 @@ export function MediaViewer({
 
       {/* Thumbnail — one of three modes renders inside. Baton overlays
           all three. Corner labels stay the same so the user always
-          knows what they're looking at. */}
+          knows what they're looking at.
+          When `thumbnailAspect` is set the box is aspect-shaped (height
+          derives from width). Otherwise the legacy flex:1 fill behaviour
+          applies — caller pins the total viewer height and the
+          thumbnail grows into the leftover. */}
       <div style={{
-        flex: 1, minHeight: 0,
-        background: 'linear-gradient(135deg, #16181d 0%, #1f242c 100%)',
+        ...(thumbnailAspect
+          ? { aspectRatio: thumbnailAspect, flex: '0 0 auto' }
+          : { flex: 1, minHeight: 0 }),
+        background: '#000',
         position: 'relative', overflow: 'hidden',
       }}>
         {/* Video element — mounted whenever videoSrc is set, regardless
@@ -344,7 +463,12 @@ export function MediaViewer({
             style={{
               position: 'absolute', inset: 0,
               width: '100%', height: '100%',
-              objectFit: 'cover',
+              // `contain` shows the whole video frame and letterboxes
+              // against the (black) box background. `cover` cropped
+              // top/bottom or sides depending on the box aspect — the
+              // user couldn't always see the whole video, especially
+              // when the viewer box was wider than the source.
+              objectFit: 'contain',
               display: mode === 'video' ? 'block' : 'none',
             }}
           />

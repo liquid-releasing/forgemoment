@@ -336,13 +336,17 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
           );
         })}
 
-        {/* Layer 5 — playhead. Renders only if the clock is inside the chapter. */}
+        {/* Layer 5 — playhead. Renders only if the clock is inside the chapter.
+            2px wide with a soft glow so it reads against the velocity-colored
+            waveform (a 1px line was getting lost in the colors). */}
         {currentMs != null && currentMs >= chapter.at_ms && currentMs <= chapter.end_ms && (
           <div style={{
             position: 'absolute',
-            left: xFor(currentMs), top: 0, bottom: 0,
-            width: 1, background: '#fff', opacity: 0.95,
+            left: xFor(currentMs) - 1, top: 0, bottom: 0,
+            width: 2, background: '#fff', opacity: 0.95,
+            boxShadow: '0 0 4px rgba(255,255,255,0.6)',
             pointerEvents: 'none',
+            zIndex: 5,
           }} />
         )}
       </div>

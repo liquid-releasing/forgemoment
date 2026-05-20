@@ -72,6 +72,21 @@ export function ChapterRibbon({
   // Notification when the viewport changes — consumers can mirror this
   // into a main funscript chart's viewport so the two stay in sync.
   onViewChange,
+  // Optional playhead position in ms. When provided, the ribbon draws a
+  // baton (vertical line + glow) at that timestamp. The baton is clamped
+  // to the current viewport — if the playhead has scrolled out of the
+  // zoomed viewport, no baton renders (rather than pinning to the edge,
+  // which would suggest the playhead is right there when it isn't).
+  //
+  // Consumer convention (FunscriptForge 2026-05-19): only pass
+  // currentMs when the *companion* viewer is showing audio or
+  // funscript — for video mode, the frame itself IS the playhead and a
+  // redundant baton just adds visual chrome. Pass `undefined` (not 0)
+  // to hide the baton; 0 still renders one at the track start. Earlier
+  // design omitted the cursor entirely (see [[project-chapter-context-
+  // strip]] thinking); the MediaViewer master clock made it useful
+  // again for non-video modes.
+  currentMs,
 }) {
   const sortedBands = useMemo(
     () => [...(bands || [])].sort((a, b) => a.at_ms - b.at_ms),
@@ -247,13 +262,27 @@ export function ChapterRibbon({
             );
           })}
 
-          {/* No playhead cursor in the ribbon — chapters are short by
-              design (that's why we broke long funscripts into chapters
-              in the first place). Real-time playback position lives in
-              the MediaViewer's HH:MM:SS.mmm timecode and transport. The
-              ribbon's job is *structural* (which chapter, what shape),
-              not temporal. Keeping the strip free of a moving cursor
-              also removes a sync surface we don't need. */}
+          {/* Playhead baton. Optional — only renders when the consumer
+              passes `currentMs` and the playhead is inside the current
+              viewport. Off-viewport positions render nothing (rather
+              than clamping to the edge, which would lie about where
+              the playhead actually is). The earlier "no cursor" stance
+              was reversed once the MediaViewer became the master clock —
+              with a real video clock, the ribbon is the natural place
+              to show where in the story we are. */}
+          {Number.isFinite(currentMs) && currentMs >= viewStart && currentMs <= viewEnd && (
+            <div style={{
+              position: 'absolute',
+              top: 0, bottom: 0,
+              left: xFor(currentMs),
+              width: 2,
+              transform: 'translateX(-1px)',
+              background: 'rgba(255,255,255,0.9)',
+              boxShadow: '0 0 6px rgba(255,255,255,0.5)',
+              pointerEvents: 'none',
+              zIndex: 5,
+            }} />
+          )}
         </div>
 
         {/* X axis */}

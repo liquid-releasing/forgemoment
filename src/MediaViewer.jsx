@@ -85,14 +85,17 @@
 //                       currentMs back.
 //   width             number (px)                             default 240
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon, Segmented } from './primitives.jsx';
+import { Sparkline } from './Charts.jsx';
 
+// Haptic mode removed 2026-05-19 — placeholder-only, no real signal to
+// show. Funscript mode covers the "what's about to fire on the device"
+// preview the user actually wants; haptic was visual noise next to it.
 const MODE_OPTIONS = [
   { value: 'video',     label: 'Video' },
   { value: 'audio',     label: 'Audio' },
   { value: 'funscript', label: 'Funscript' },
-  { value: 'haptic',    label: 'Haptic' },
 ];
 
 export function MediaViewer({
@@ -172,6 +175,68 @@ export function MediaViewer({
   useEffect(() => {
     onTimeChange?.(currentMs);
   }, [currentMs, onTimeChange]);
+
+  // ── Video element wiring ────────────────────────────────────────
+  // The <video> element is rendered with just a src by default; without
+  // ref-based control it plays nothing. These three effects bind the
+  // element to the consumer's props so the viewer's chrome (play
+  // button, baton, scrub, mode toggle, transport) drives real playback.
+  const videoRef = useRef(null);
+
+  // Play / pause sync. video.play() returns a Promise that rejects on
+  // autoplay block, codec failure, decode error, etc. We log the
+  // rejection rather than swallow it — silent rejection is what made
+  // "no sound" hard to diagnose during the first dogfood pass
+  // (2026-05-19). Pause is synchronous.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) return;
+    if (isPlaying) {
+      const p = v.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch((err) => {
+          console.warn('MediaViewer: video.play() rejected', err?.name, err?.message);
+        });
+      }
+    } else {
+      v.pause();
+    }
+  }, [isPlaying, videoSrc]);
+
+  // Seek sync. When currentMs drifts from the video's clock by more
+  // than the SEEK_TOLERANCE_MS threshold, snap the video to match.
+  // Threshold matters: timeupdate fires at ~4 Hz on Chromium with
+  // perceptible jitter, and assigning video.currentTime triggers a
+  // seek that itself fires timeupdate — without a tolerance we get a
+  // feedback loop where every consumer setCurrentMs call snaps the
+  // video, which fires timeupdate, which re-runs the consumer's
+  // setCurrentMs, etc. 80ms is comfortably above the jitter and below
+  // perceptible drift.
+  const SEEK_TOLERANCE_MS = 80;
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) return;
+    const targetSec = (currentMs ?? 0) / 1000;
+    if (Number.isNaN(targetSec)) return;
+    const driftMs = Math.abs(v.currentTime * 1000 - currentMs);
+    if (driftMs > SEEK_TOLERANCE_MS) {
+      try { v.currentTime = targetSec; } catch { /* readyState gate not met */ }
+    }
+  }, [currentMs, videoSrc]);
+
+  // Time-update emitter. The <video> drives the master clock when it's
+  // playing — onTimeChange fires per video frame (Chromium delivers
+  // ~4-5 Hz, which is good enough for the baton). This is the inverse
+  // of the seek-sync effect: the video is the source of truth while
+  // playing; the consumer is the source of truth while seeking. The
+  // tolerance gate above prevents the two from fighting each other.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return undefined;
+    const handler = () => onTimeChange?.(v.currentTime * 1000);
+    v.addEventListener('timeupdate', handler);
+    return () => v.removeEventListener('timeupdate', handler);
+  }, [onTimeChange]);
 
   // Back-compat: callers may still pass onPrevChapter/onNextChapter.
   const prev = onPrev ?? onPrevChapter;
@@ -255,11 +320,36 @@ export function MediaViewer({
         background: 'linear-gradient(135deg, #16181d 0%, #1f242c 100%)',
         position: 'relative', overflow: 'hidden',
       }}>
-        {mode === 'video' && (
-          videoSrc
-            ? <video src={videoSrc} muted style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-            : <VideoPoster title={media.title} />
+        {/* Video element — mounted whenever videoSrc is set, regardless
+            of mode. Visibility is mode-controlled (hide when mode !==
+            'video') but the element stays in the DOM so its audio
+            decoder keeps running. Unmounting on mode change would kill
+            audio playback during Audio/Funscript views, which is the
+            opposite of what those modes are for (Audio mode shows the
+            waveform *while you listen*; Funscript mode shows the curve
+            *while audio plays the beat*). The element acts as the
+            master audio source across all modes. */}
+        {videoSrc && (
+          <video
+            ref={videoRef}
+            src={videoSrc}
+            // Intentionally unmuted — this is an authoring tool, the
+            // user wants to hear the audio to align the funscript
+            // against beats and vocals. Autoplay restrictions don't
+            // bite because play() is triggered by the user clicking
+            // the transport (user activation flows through to the
+            // effect that calls v.play()).
+            playsInline
+            preload="metadata"
+            style={{
+              position: 'absolute', inset: 0,
+              width: '100%', height: '100%',
+              objectFit: 'cover',
+              display: mode === 'video' ? 'block' : 'none',
+            }}
+          />
         )}
+        {mode === 'video' && !videoSrc && <VideoPoster title={media.title} />}
         {mode === 'audio' && (
           audioWaveform
             ? <WaveformCanvas waveform={audioWaveform} batonPos={batonPos} />
@@ -267,14 +357,20 @@ export function MediaViewer({
         )}
         {mode === 'funscript' && (
           funscript
-            ? <FunscriptCurve actions={funscript.actions} batonRange={batonRange} />
+            ? <FunscriptBeatWindow
+                actions={funscript.actions}
+                currentMs={currentMs}
+                batonRange={batonRange}
+              />
             : <FunscriptPlaceholder />
         )}
-        {mode === 'haptic' && (
-          <HapticPlaceholder />
-        )}
 
-        {/* Baton — the playhead. Same look across modes.
+        {/* Baton — the playhead. Hidden in video mode: the frame
+            itself IS the playhead, so a baton over it is redundant
+            chrome (and adds a sync surface that has to keep up with
+            playback). For audio (waveform) and funscript (curve)
+            modes the underlying art is static, so a moving baton
+            earns its keep.
             `transform: translateX(-50%)` centers the 1.5px line on
             its position so the baton stays visible at both edges
             (without this, batonPos=1 puts the line's left edge at
@@ -284,16 +380,23 @@ export function MediaViewer({
             chapter.start), draw faded so the user reads "playhead is
             outside this chapter" not "the baton broke". The arrow
             chip below makes the direction explicit. */}
-        <div style={{
-          position: 'absolute', top: 0, bottom: 0,
-          left: `${batonPos * 100}%`,
-          width: 1.5,
-          transform: 'translateX(-50%)',
-          background: outOfScope ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.85)',
-          boxShadow: outOfScope ? 'none' : '0 0 6px rgba(255,255,255,0.45)',
-          pointerEvents: 'none',
-        }} />
-        {outOfScope && (
+        {/* The outer baton only renders for audio mode. Video has the
+            frame itself as the playhead; funscript renders its own
+            internal baton at the scroll-tape's current position (which
+            sits at the left initially and settles at center once enough
+            past content has filled in). */}
+        {mode === 'audio' && (
+          <div style={{
+            position: 'absolute', top: 0, bottom: 0,
+            left: `${batonPos * 100}%`,
+            width: 1.5,
+            transform: 'translateX(-50%)',
+            background: outOfScope ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.85)',
+            boxShadow: outOfScope ? 'none' : '0 0 6px rgba(255,255,255,0.45)',
+            pointerEvents: 'none',
+          }} />
+        )}
+        {mode === 'audio' && outOfScope && (
           <div style={{
             position: 'absolute',
             top: 6,
@@ -492,31 +595,6 @@ function AudioWavePlaceholder() {
   );
 }
 
-// Haptic-channel placeholder. The haptic view will eventually render a
-// stim-style multi-channel strip (Stim tab signal preview); for now it
-// matches the funscript placeholder's footprint with a denser, dual-
-// channel feel so haptic-vs-funscript reads as visually distinct.
-function HapticPlaceholder() {
-  const top = Array.from({ length: 48 }, (_, i) => {
-    const x = (i / 47) * 100;
-    const y = 22 + Math.sin(i * 0.5) * 10 + Math.cos(i * 1.1) * 4;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  });
-  const bot = Array.from({ length: 48 }, (_, i) => {
-    const x = (i / 47) * 100;
-    const y = 42 + Math.sin(i * 0.7 + 1.4) * 8 + Math.cos(i * 1.3) * 4;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  });
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 100 60" preserveAspectRatio="none" style={{ display: 'block' }}>
-      <line x1="0" y1="22" x2="100" y2="22" stroke="rgba(255,255,255,0.04)" strokeWidth="0.4" />
-      <line x1="0" y1="42" x2="100" y2="42" stroke="rgba(255,255,255,0.04)" strokeWidth="0.4" />
-      <polyline points={top.join(' ')} fill="none" stroke="rgba(255,180,80,0.65)" strokeWidth="0.8" />
-      <polyline points={bot.join(' ')} fill="none" stroke="rgba(255,80,140,0.65)" strokeWidth="0.8" />
-    </svg>
-  );
-}
-
 function FunscriptPlaceholder() {
   const pts = Array.from({ length: 48 }, (_, i) => {
     const x = (i / 47) * 100;
@@ -562,30 +640,97 @@ function WaveformCanvas({ waveform, batonPos }) {
   );
 }
 
-function FunscriptCurve({ actions, batonRange }) {
-  // Renders the funscript curve inside batonRange (chapter slice or
-  // full track). pos 0 = bottom of canvas, pos 100 = top. Inversion
-  // matches the convention in `Charts.jsx` where higher pos = higher
-  // y. Empty actions falls back to the static placeholder.
+// FunscriptBeatWindow — scrolling beat tape centered on the playhead.
+//
+// The funscript view exists to show "what the device is about to do":
+// individual strokes pop as discrete features, velocity-colored
+// (canonical blue→red colormap), close enough together to read the
+// beat pattern. A 12-second window is the default — wide enough to see
+// the next handful of strokes coming, narrow enough that single strokes
+// remain visually distinct.
+//
+// Baton behaviour (per user direction 2026-05-19):
+//   - At the start of a chapter, the baton sits at the left edge. The
+//     funscript extends to its right (future beats). No empty space
+//     before the start since there's no past content yet.
+//   - As `currentMs` advances past windowMs/2, the window slides forward
+//     and the baton settles at center. Past beats scroll off the left,
+//     future beats arrive from the right. This is the "guitar hero"
+//     scroll.
+//   - Near the end of the chapter, the window stops sliding and the
+//     baton continues past center toward the right, matching how the
+//     start works symmetrically.
+//
+// Coordinate space: 100×100 viewBox like Sparkline. x = window-relative
+// time, y = inverted funscript position (pos=100 at top, pos=0 at
+// bottom — matches Charts.jsx convention).
+function FunscriptBeatWindow({ actions, currentMs, batonRange, windowMs = 12000 }) {
   if (!actions || actions.length === 0) return <FunscriptPlaceholder />;
 
-  const dur = Math.max(1, batonRange.end - batonRange.start);
+  const trackStart = batonRange.start;
+  const trackEnd = batonRange.end;
+  const trackSpan = Math.max(1, trackEnd - trackStart);
+  // If the chapter is shorter than the window, just render the whole
+  // chapter — no scrolling needed, the baton sweeps across it.
+  const effWindowMs = Math.min(windowMs, trackSpan);
+  const half = effWindowMs / 2;
+
+  // Clamp the playhead into [trackStart, trackEnd]. Compute the window
+  // start so the playhead sits at center, then clamp to track bounds:
+  // sliding the window past either end of the chapter would show empty
+  // space, so the window pins at the boundary and the baton position
+  // slides instead.
+  const playhead = Math.max(trackStart, Math.min(trackEnd, currentMs ?? trackStart));
+  let windowStart = playhead - half;
+  if (windowStart < trackStart) windowStart = trackStart;
+  if (windowStart + effWindowMs > trackEnd) windowStart = trackEnd - effWindowMs;
+  const windowEnd = windowStart + effWindowMs;
+  const batonXPct = ((playhead - windowStart) / effWindowMs) * 100;
+
+  // Filter to the visible window with a small overscan so polyline
+  // endpoints connect cleanly at the edges instead of being clipped
+  // mid-stroke.
+  const overscan = Math.max(50, effWindowMs * 0.02);
   const visible = actions.filter(
-    (a) => a.at >= batonRange.start && a.at <= batonRange.end,
+    (a) => a.at >= windowStart - overscan && a.at <= windowEnd + overscan,
   );
-  if (visible.length === 0) return <FunscriptPlaceholder />;
 
-  const pts = visible.map((a) => {
-    const x = ((a.at - batonRange.start) / dur) * 100;
-    const y = 60 - (Math.max(0, Math.min(100, a.pos)) / 100) * 60;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  });
-
+  // Render the baton overlay regardless of whether the window slice has
+  // content. Earlier shape (2026-05-19 PM) returned FunscriptPlaceholder
+  // when visible was empty and stripped the baton with it — user lost
+  // the baton when video playback parked the playhead in a sparse region
+  // of the funscript (or before the chapter's actions begin). The baton
+  // is the navigation anchor; it has to render even when the curve is
+  // momentarily empty.
   return (
-    <svg width="100%" height="100%" viewBox="0 0 100 60" preserveAspectRatio="none" style={{ display: 'block' }}>
-      <line x1="0" y1="30" x2="100" y2="30" stroke="rgba(255,255,255,0.04)" strokeWidth="0.4" />
-      <polyline points={pts.join(' ')} fill="none" stroke="var(--accent, #ff4b4b)" strokeWidth="0.8" />
-    </svg>
+    <div style={{ position: 'absolute', inset: 0 }}>
+      {visible.length > 0 ? (
+        <Sparkline
+          actions={visible}
+          start={windowStart}
+          end={windowEnd}
+          colorMode="velocity"
+          filled
+          height="100%"
+        />
+      ) : (
+        <FunscriptPlaceholder />
+      )}
+      <div style={{
+        position: 'absolute', top: 0, bottom: 0,
+        // Clamp via translateX based on edge proximity so the baton
+        // stays fully visible at both ends. At left edge: no shift
+        // (line at x=[0,2]). At right edge: shift by full width (line
+        // at x=[w-2, w]). Linear interp between.
+        left: `${batonXPct}%`,
+        width: 2,
+        transform: `translateX(${-2 * (batonXPct / 100)}px)`,
+        background: 'rgba(255,255,255,0.95)',
+        boxShadow: '0 0 6px rgba(255,255,255,0.6)',
+        pointerEvents: 'none',
+        zIndex: 5,
+      }} />
+    </div>
   );
 }
 

@@ -51,6 +51,14 @@ export function ChapterRibbon({
   actions = [],                     // full funscript [{at, pos}] for waveform rendering
   selectedId,
   onSelect,                         // (band) => void
+  // Optional within-band seek. Click semantics (per user direction
+  // 2026-05-19): clicking a DIFFERENT band selects it (onSelect, jumps
+  // playhead to band.at_ms via the consumer's selection effect).
+  // Clicking the ALREADY-SELECTED band fires onSeek(ms) with the click
+  // position mapped to ms inside the band — within-chapter scrub. The
+  // two modes are disambiguated by which band you clicked, so there's
+  // no ambiguity over "did I mean to change chapter or scrub."
+  onSeek,                           // (ms) => void
   menu = [],                        // [{ id, label, icon?, onClick, disabled? }]
   height = 120,                     // total ribbon height
   // Show Y axis (0/50/100 position labels) and X axis (time tick labels).
@@ -258,6 +266,7 @@ export function ChapterRibbon({
                 menu={menu}
                 index={sortedBands.findIndex((b) => b.id === band.id)}
                 onSelect={onSelect}
+                onSeek={onSeek}
               />
             );
           })}
@@ -376,7 +385,7 @@ function fmtTickLabel(ms, intervalMs) {
 }
 
 function Band({
-  band, actions, selected, leftPx, widthPx, menu, index, onSelect,
+  band, actions, selected, leftPx, widthPx, menu, index, onSelect, onSeek,
 }) {
   const tone = band.toneColor || GREY_TINT;
   const isGrey = !band.toneColor;
@@ -392,9 +401,26 @@ function Band({
   const showTitle = widthPx >= MIN_TITLE_PX;
   const showMenu = widthPx >= MIN_BAND_PX * 4;
 
+  // Click: select if it's a different band; seek to clicked position if
+  // it's the already-selected band. The fallback to onSelect when
+  // onSeek is missing means consumers who don't wire seek still get
+  // the "click-active-band = no-op" they used to (rather than a
+  // confusing "click changes nothing" when there's no seek handler).
+  const handleClick = (e) => {
+    if (selected && onSeek) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      const frac = rect.width > 0 ? x / rect.width : 0;
+      const ms = band.at_ms + frac * (band.end_ms - band.at_ms);
+      onSeek(ms);
+    } else {
+      onSelect?.(band);
+    }
+  };
+
   return (
     <div
-      onClick={() => onSelect?.(band)}
+      onClick={handleClick}
       title={band.name || band.id}
       style={{
         position: 'absolute',

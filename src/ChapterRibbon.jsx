@@ -451,9 +451,36 @@ function Band({
         />
       </div>
 
+      {/* Accept checkmark — corner badge for chapters the user has
+          signed off on (per-chapter accept from ChaptersTab). Consumers
+          pass `accepted: true` on the band record to opt in. Pinned to
+          the upper-left of the band so the title can sit next to it
+          when both are shown. Only renders when the band is wide enough
+          for the title (avoids stacking on tiny bands). */}
+      {band.accepted && showTitle && (
+        <div style={{
+          position: 'absolute', top: 4, left: 6,
+          width: 14, height: 14, borderRadius: 7,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.55)',
+          border: `1px solid ${tone}`,
+          color: tone,
+          fontSize: 9, fontWeight: 700,
+          boxShadow: '0 0 4px rgba(0,0,0,0.45)',
+          pointerEvents: 'none',
+        }}>
+          <Icon name="check" size={9} />
+        </div>
+      )}
+
       {showTitle && (
         <div style={{
-          position: 'absolute', top: 4, left: 8, right: 30,
+          position: 'absolute', top: 4,
+          // Shift the title right when a check badge is showing so they
+          // don't overlap; otherwise the title hugs the left edge as
+          // before.
+          left: band.accepted ? 26 : 8,
+          right: 30,
           fontSize: 11.5, fontWeight: 700,
           // Selected band: white title so it reads cleanly over the
           // brighter tinted background. Non-selected: tone color (or

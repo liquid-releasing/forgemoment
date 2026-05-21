@@ -23,6 +23,14 @@
 //
 // Props (alphabetical):
 //   audioWaveform     {peaks: number[], durationMs: number}  optional
+//   spectrogram       {cells: Uint8Array, nMels, nFrames,    optional
+//                      hopMs, durationMs, dbFloor, dbCeiling}
+//                       Pre-computed mel spectrogram from
+//                       videoflow.audio_spectrogram. Cells are uint8
+//                       (0..255) time-major: cells[t * nMels + bin].
+//                       SpectrogramCanvas reads its own 12s window
+//                       around currentMs — no chapter-scope slicing
+//                       needed from the consumer.
 //   chapter           {id, title, color, start, end}         optional
 //                       When set, the baton position is computed
 //                       relative to chapter.start/end instead of
@@ -92,14 +100,62 @@ import { Sparkline } from './Charts.jsx';
 // Haptic mode removed 2026-05-19 — placeholder-only, no real signal to
 // show. Funscript mode covers the "what's about to fire on the device"
 // preview the user actually wants; haptic was visual noise next to it.
+//
+// Spectrogram (2026-05-21) — second audio visualization. Where Audio
+// (peak envelope) shows "loud vs quiet", Spectro shows "what's in this
+// audio" (bass band, vocal band, percussive vs sustained). Particularly
+// valuable for Chapters-tab split-finding workflows; see
+// SpectrogramCanvas below for the canvas2D + magma LUT renderer.
 const MODE_OPTIONS = [
-  { value: 'video',     label: 'Video' },
-  { value: 'audio',     label: 'Audio' },
-  { value: 'funscript', label: 'Funscript' },
+  { value: 'video',       label: 'Video' },
+  { value: 'audio',       label: 'Audio' },
+  { value: 'spectrogram', label: 'Spectro' },
+  { value: 'funscript',   label: 'Funscript' },
 ];
+
+// Magma-inspired warm-on-dark gradient. Control points sampled along
+// matplotlib's magma colormap and linearly interpolated into a 256-entry
+// LUT, built once at module load. Each LUT entry is 4 bytes (RGBA);
+// SpectrogramCanvas indexes by the quantized cell byte and copies the
+// triple straight into an ImageData buffer — no float math at paint time.
+//
+// Why magma: warm-on-dark reads well on a black thumbnail background,
+// preserves perceptual ordering (brightness = energy), and matches the
+// matplotlib reference renders committed under
+// funscriptforge/test_funscript/*.spectrogram.png — so the static
+// reference PNGs and the in-app canvas tell a consistent visual story.
+const MAGMA_STOPS = [
+  // [t, r, g, b]
+  [0.00,   0,   0,   4],  // near-black with a hint of blue
+  [0.18,  35,  18,  90],  // deep purple
+  [0.36,  92,  20, 120],  // wine
+  [0.54, 175,  47, 100],  // magenta-red
+  [0.72, 250, 110,  70],  // orange-red
+  [0.86, 252, 175,  85],  // amber
+  [1.00, 252, 253, 191],  // near-white, warm yellow
+];
+
+const MAGMA_LUT = (() => {
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i += 1) {
+    const t = i / 255;
+    let lo = 0;
+    while (lo < MAGMA_STOPS.length - 1 && MAGMA_STOPS[lo + 1][0] < t) lo += 1;
+    const a = MAGMA_STOPS[lo];
+    const b = MAGMA_STOPS[Math.min(lo + 1, MAGMA_STOPS.length - 1)];
+    const span = (b[0] - a[0]) || 1;
+    const f = (t - a[0]) / span;
+    lut[i * 4 + 0] = a[1] + (b[1] - a[1]) * f;
+    lut[i * 4 + 1] = a[2] + (b[2] - a[2]) * f;
+    lut[i * 4 + 2] = a[3] + (b[3] - a[3]) * f;
+    lut[i * 4 + 3] = 255;
+  }
+  return lut;
+})();
 
 export function MediaViewer({
   audioWaveform,
+  spectrogram,
   chapter,
   currentMs = 0,
   defaultMode = 'video',
@@ -476,8 +532,16 @@ export function MediaViewer({
         {mode === 'video' && !videoSrc && <VideoPoster title={media.title} />}
         {mode === 'audio' && (
           audioWaveform
-            ? <WaveformCanvas waveform={audioWaveform} batonPos={batonPos} />
+            ? <WaveformCanvas waveform={audioWaveform} currentMs={currentMs} />
             : <AudioWavePlaceholder />
+        )}
+        {mode === 'spectrogram' && (
+          spectrogram && spectrogram.cells && spectrogram.cells.length > 0
+            ? <SpectrogramCanvas
+                spectrogram={spectrogram}
+                currentMs={currentMs}
+              />
+            : <SpectrogramPlaceholder />
         )}
         {mode === 'funscript' && (
           funscript
@@ -504,40 +568,14 @@ export function MediaViewer({
             chapter.start), draw faded so the user reads "playhead is
             outside this chapter" not "the baton broke". The arrow
             chip below makes the direction explicit. */}
-        {/* The outer baton only renders for audio mode. Video has the
-            frame itself as the playhead; funscript renders its own
-            internal baton at the scroll-tape's current position (which
-            sits at the left initially and settles at center once enough
-            past content has filled in). */}
-        {mode === 'audio' && (
-          <div style={{
-            position: 'absolute', top: 0, bottom: 0,
-            left: `${batonPos * 100}%`,
-            width: 1.5,
-            transform: 'translateX(-50%)',
-            background: outOfScope ? 'rgba(255,255,255,0.30)' : 'rgba(255,255,255,0.85)',
-            boxShadow: outOfScope ? 'none' : '0 0 6px rgba(255,255,255,0.45)',
-            pointerEvents: 'none',
-          }} />
-        )}
-        {mode === 'audio' && outOfScope && (
-          <div style={{
-            position: 'absolute',
-            top: 6,
-            ...(outDirection === 'after'
-              ? { right: 4 }
-              : { left: 4 }),
-            padding: '2px 6px',
-            borderRadius: 4,
-            background: 'rgba(0,0,0,0.55)',
-            color: 'rgba(255,255,255,0.85)',
-            fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
-            textTransform: 'uppercase',
-            pointerEvents: 'none',
-          }}>
-            {outDirection === 'after' ? 'past end →' : '← before start'}
-          </div>
-        )}
+        {/* Per-mode batons now live INSIDE each canvas component
+            (WaveformCanvas, SpectrogramCanvas, FunscriptBeatWindow). All
+            three use the same window-relative positioning model since
+            they all scroll a 12s window around currentMs. Video mode
+            uses the frame itself as the playhead (no baton). The old
+            chapter-relative outer audio baton + out-of-scope chip were
+            retired 2026-05-21 when WaveformCanvas moved to absolute-
+            window canvas2D and stopped needing the parent's batonPos. */}
 
         {/* Corner mode label — redundant with the toggle but useful
             when the toggle is hidden via showModeToggle=false. Opt out
@@ -565,6 +603,17 @@ export function MediaViewer({
           </div>
         )}
       </div>
+
+      {/* Audio dashboard — live "what is this audio right now" readout.
+          Renders only when sidecar data is loaded; quiet no-op otherwise.
+          Visible across all modes since audio is the master clock even
+          when the video frame is on screen. See AudioDashboard component
+          below for the full rationale. */}
+      <AudioDashboard
+        audioWaveform={audioWaveform}
+        spectrogram={spectrogram}
+        currentMs={currentMs}
+      />
 
       {/* Prominent centered timecode — HH:MM:SS.mmm. Drives off `currentMs`,
           so it ticks at whatever rate the consumer drives playback. The
@@ -735,32 +784,560 @@ function FunscriptPlaceholder() {
 }
 
 // ─── Real-data renderers (used when data props are supplied) ─────
-function WaveformCanvas({ waveform, batonPos }) {
-  // Renders a peak-array waveform symmetric around the canvas center,
-  // scrolling so the baton stays roughly in the middle. Falls back to
-  // the static placeholder shape when peaks is empty.
-  const peaks = waveform?.peaks || [];
-  if (peaks.length === 0) return <AudioWavePlaceholder />;
+// WaveformCanvas — peak envelope, 12s absolute window scrolling with
+// the playhead (same windowing model as SpectrogramCanvas and
+// FunscriptBeatWindow). Three lock-step time-aware modes now share
+// one positioning contract.
+//
+// Earlier shape (pre-2026-05-21): SVG `<rect>` per peak in a 16%-of-
+// chapter window, with consumers downsampling to ~200 bars BEFORE
+// passing in to keep React reconciliation from echoing playback on
+// long files. That was the chapters tab's TARGET_BARS=200 dance.
+// Canvas2D imperative paint handles thousands of bars cheaply (no React
+// diff per timeupdate), so we read the full-track peaks directly and
+// window absolutely against `currentMs` — no more chapter-scope
+// downsample, no more "advances every 2 seconds" feel.
+//
+// Coordinate model: peaks indexed by absolute frame number (frame =
+// floor(timeMs / hopMs)). Visible window = 12s around currentMs,
+// clamped to track bounds. Baton sits roughly centered, with the same
+// edge-clamp + translateX shift as FunscriptBeatWindow.
+function WaveformCanvas({ waveform, currentMs, windowMs = 12000 }) {
+  const canvasRef = useRef(null);
 
-  // Visible window: 8 seconds wide centred on the playhead. Consumers
-  // wanting different zoom should pass a sliced `peaks` themselves.
-  const VISIBLE_WINDOW = 0.16; // 16% of total duration
-  const half = VISIBLE_WINDOW / 2;
-  const start = Math.max(0, Math.min(1 - VISIBLE_WINDOW, batonPos - half));
-  const startIdx = Math.floor(start * peaks.length);
-  const endIdx = Math.min(peaks.length, Math.ceil((start + VISIBLE_WINDOW) * peaks.length));
-  const slice = peaks.slice(startIdx, endIdx);
+  const peaks = waveform?.peaks;
+  const durationMs = waveform?.durationMs ?? 0;
+  const hopMs = waveform?.hopMs ?? (
+    // Back-compat: legacy callers may not pass hopMs. Derive from
+    // peak count + duration when we can; default to 10 (the standard
+    // peak hop) otherwise.
+    peaks && durationMs > 0 && peaks.length > 0
+      ? Math.max(1, Math.round(durationMs / peaks.length))
+      : 10
+  );
+
+  // Visible window — computed in render so the baton overlay and the
+  // canvas paint use the exact same range. Cheap math, no allocations.
+  let windowStart = 0;
+  let batonXPct = 0;
+  if (peaks && peaks.length > 0 && durationMs > 0) {
+    const playhead = Math.max(0, Math.min(durationMs, currentMs ?? 0));
+    const effWindowMs = Math.min(windowMs, durationMs);
+    const half = effWindowMs / 2;
+    windowStart = playhead - half;
+    if (windowStart < 0) windowStart = 0;
+    if (windowStart + effWindowMs > durationMs) {
+      windowStart = Math.max(0, durationMs - effWindowMs);
+    }
+    batonXPct = ((playhead - windowStart) / effWindowMs) * 100;
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !peaks || peaks.length === 0 || durationMs <= 0 || hopMs <= 0) return;
+
+    const effWindowMs = Math.min(windowMs, durationMs);
+    const startFrame = Math.max(0, Math.floor(windowStart / hopMs));
+    const framesInWindow = Math.max(1, Math.ceil(effWindowMs / hopMs));
+    const endFrame = Math.min(peaks.length, startFrame + framesInWindow);
+    const visibleFrames = Math.max(1, endFrame - startFrame);
+
+    // Canvas height = container height in CSS pixels (browser scales the
+    // 1px-per-frame internal width to fit). Fixed internal height of 80
+    // gives crisp vertical bars without pixel doubling cost on retina.
+    const internalHeight = 80;
+    if (canvas.width !== visibleFrames) canvas.width = visibleFrames;
+    if (canvas.height !== internalHeight) canvas.height = internalHeight;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, visibleFrames, internalHeight);
+
+    // Symmetric bars around the canvas mid-line. fillRect once per
+    // frame — at 12s × 100 peaks/sec = 1200 frames, well within
+    // canvas2D's comfort zone (sub-millisecond paint).
+    ctx.fillStyle = 'rgba(217,87,33,0.75)';
+    const midY = internalHeight / 2;
+    for (let t = 0; t < visibleFrames; t += 1) {
+      const v = peaks[startFrame + t] ?? 0;
+      const halfH = Math.max(0.5, v * (internalHeight / 2));
+      ctx.fillRect(t, midY - halfH, 1, halfH * 2);
+    }
+  }, [peaks, durationMs, hopMs, windowStart, windowMs]);
+
+  if (!peaks || peaks.length === 0) return <AudioWavePlaceholder />;
 
   return (
-    <svg width="100%" height="100%" viewBox="0 0 100 60" preserveAspectRatio="none" style={{ display: 'block' }}>
-      {slice.map((p, i) => {
-        const x = (i / slice.length) * 100;
-        const w = 100 / slice.length - 0.1;
-        const h = Math.max(0.5, Math.abs(p) * 50);
-        const y = (60 - h) / 2;
-        return <rect key={i} x={x} y={y} width={w} height={h} fill="rgba(217,87,33,0.65)" />;
-      })}
-    </svg>
+    <div style={{ position: 'absolute', inset: 0 }}>
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: 'absolute', inset: 0,
+          width: '100%', height: '100%',
+          imageRendering: 'auto',
+          background: '#0a0a0e',
+        }}
+      />
+      {/* Window-relative baton — matches SpectrogramCanvas + FunscriptBeatWindow. */}
+      <div style={{
+        position: 'absolute', top: 0, bottom: 0,
+        left: `${batonXPct}%`,
+        width: 2,
+        transform: `translateX(${-2 * (batonXPct / 100)}px)`,
+        background: 'rgba(255,255,255,0.95)',
+        boxShadow: '0 0 6px rgba(255,255,255,0.6)',
+        pointerEvents: 'none',
+        zIndex: 5,
+      }} />
+    </div>
+  );
+}
+
+// SpectrogramCanvas — mel-spectrogram heatmap, 12s window scrolling
+// with the playhead (same windowing model as FunscriptBeatWindow).
+//
+// Renders imperatively to a <canvas> in a useEffect paint pass — never
+// through React's reconciler. The peaks WaveformCanvas earlier in this
+// file uses per-bar SVG <rect>s and the React diff cost at every
+// timeupdate (5 Hz) caused playback echo on long files (commit b4a7082
+// in funscriptforge). Spectrogram cell counts are higher still (~64
+// bins × ~500 visible frames = ~32k cells per paint), so per-element
+// rendering is a non-starter. One imperative `ctx.putImageData()` per
+// paint handles it cheaply.
+//
+// Coordinate model: cells are time-major (`cells[t * nMels + bin]`) so
+// a visible window is a contiguous byte range. Mel bins render with
+// low frequency at the bottom of the canvas (matching matplotlib's
+// `y_axis="mel"` convention used in the reference PNGs at
+// funscriptforge/test_funscript/*.spectrogram.png).
+//
+// Baton is rendered INSIDE this component (not via the outer audio
+// baton in MediaViewer) because the window slides with currentMs and
+// the baton sits roughly centered — different positioning model from
+// Audio mode's chapter-relative batonPos.
+// View modes for the spectrogram surface. Two presets cover the two
+// common editing tasks:
+//   - 'fine' (12s window, full 64 mel bins): beat / phrase work; see
+//     individual transients, vocal articulation, percussion strikes.
+//   - 'coarse' (60s window, every 2nd mel bin): section finding; see
+//     song-section transitions as broad color blocks (the DaVinci
+//     audio-overlay aesthetic). Bass / mid / treble groupings pop.
+// Implemented as a local component state — no parent wiring required.
+// Pinch-zoom / wheel-zoom could replace the discrete toggle later but
+// discrete is more discoverable for first-time users.
+const SPEC_VIEW_PRESETS = {
+  fine:   { windowMs: 12000, binStride: 1 },
+  coarse: { windowMs: 60000, binStride: 2 },
+};
+
+function SpectrogramCanvas({ spectrogram, currentMs, windowMs }) {
+  const canvasRef = useRef(null);
+  const [view, setView] = useState('fine');  // 'fine' | 'coarse'
+  const preset = SPEC_VIEW_PRESETS[view] ?? SPEC_VIEW_PRESETS.fine;
+  // Caller can override the fine-mode window via prop; the coarse preset
+  // always uses its larger window so the section-finding behaviour stays
+  // consistent across consumers.
+  const baseWindowMs = view === 'coarse' ? preset.windowMs : (windowMs ?? preset.windowMs);
+  const binStride = preset.binStride;
+
+  // Compute the visible window once per render. Same math used below
+  // for the baton overlay AND in the paint effect, kept in one place
+  // so they can't drift.
+  const cells = spectrogram?.cells;
+  const nMels = spectrogram?.nMels ?? 0;
+  const nFrames = spectrogram?.nFrames ?? 0;
+  const hopMs = spectrogram?.hopMs ?? 0;
+  const durationMs = spectrogram?.durationMs ?? 0;
+
+  let windowStart = 0;
+  let batonXPct = 0;
+  if (nFrames > 0 && hopMs > 0 && durationMs > 0) {
+    const playhead = Math.max(0, Math.min(durationMs, currentMs ?? 0));
+    const effWindowMs = Math.min(baseWindowMs, durationMs);
+    const half = effWindowMs / 2;
+    windowStart = playhead - half;
+    if (windowStart < 0) windowStart = 0;
+    if (windowStart + effWindowMs > durationMs) {
+      windowStart = Math.max(0, durationMs - effWindowMs);
+    }
+    batonXPct = ((playhead - windowStart) / effWindowMs) * 100;
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !cells || nMels <= 0 || nFrames <= 0 || hopMs <= 0) return;
+
+    const effWindowMs = Math.min(baseWindowMs, durationMs);
+    const startFrame = Math.max(0, Math.floor(windowStart / hopMs));
+    const framesInWindow = Math.max(1, Math.ceil(effWindowMs / hopMs));
+    const endFrame = Math.min(nFrames, startFrame + framesInWindow);
+    const visibleFrames = Math.max(1, endFrame - startFrame);
+    // Effective vertical resolution in coarse mode is nMels/binStride;
+    // when we skip bins we ALSO shrink the internal canvas height so
+    // the cells look correspondingly chunkier (browser bilinear up-
+    // scaling does the rest). Without this, skipping bins would just
+    // leave horizontal stripes — not what "coarser" should read as.
+    const outBins = Math.max(1, Math.floor(nMels / binStride));
+
+    if (canvas.width !== visibleFrames) canvas.width = visibleFrames;
+    if (canvas.height !== outBins) canvas.height = outBins;
+
+    const ctx = canvas.getContext('2d');
+    const imageData = ctx.createImageData(visibleFrames, outBins);
+    const data = imageData.data;
+
+    // Paint cells. Loop order: outer t (column), inner bin (row).
+    // `dstRow = outBins - 1 - i` flips the axis so low freq is at
+    // bottom of the canvas, high freq at top.
+    for (let t = 0; t < visibleFrames; t += 1) {
+      const srcT = startFrame + t;
+      const srcRowOffset = srcT * nMels;
+      for (let i = 0; i < outBins; i += 1) {
+        // In coarse mode (binStride=2) average each pair of source bins
+        // to smooth the band aggregation. In fine mode this is a single
+        // read.
+        let byte = 0;
+        let n = 0;
+        for (let k = 0; k < binStride; k += 1) {
+          const srcBin = i * binStride + k;
+          if (srcBin < nMels) {
+            byte += cells[srcRowOffset + srcBin];
+            n += 1;
+          }
+        }
+        const v = n > 0 ? Math.round(byte / n) : 0;
+        const lutOffset = v * 4;
+        const dstRow = outBins - 1 - i;
+        const pxOffset = (dstRow * visibleFrames + t) * 4;
+        data[pxOffset + 0] = MAGMA_LUT[lutOffset + 0];
+        data[pxOffset + 1] = MAGMA_LUT[lutOffset + 1];
+        data[pxOffset + 2] = MAGMA_LUT[lutOffset + 2];
+        data[pxOffset + 3] = 255;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }, [cells, nMels, nFrames, hopMs, durationMs, windowStart, baseWindowMs, binStride]);
+
+  // Window-duration label for the toggle button — the two presets map to
+  // discrete user-meaningful spans (beat-level vs section-level).
+  const otherView = view === 'fine' ? 'coarse' : 'fine';
+  const toggleLabel = view === 'fine' ? '12s' : '60s';
+  const toggleHint = view === 'fine'
+    ? 'Switch to section view (60s, coarser bins)'
+    : 'Switch to detail view (12s, full bins)';
+
+  return (
+    <div style={{ position: 'absolute', inset: 0 }}>
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: 'absolute', inset: 0,
+          width: '100%', height: '100%',
+          // Default 'auto' rendering = bilinear interp. The 1px-per-frame
+          // canvas stretched to ~500-800 display px reads smoothly; with
+          // 'pixelated' the cells would render as visible blocks which
+          // hurts the "see frequency texture" intent.
+          imageRendering: 'auto',
+          background: '#000004',
+        }}
+      />
+      {/* Window-relative baton. Mirrors FunscriptBeatWindow's positioning:
+          translateX shift keeps the line fully visible at both edges. */}
+      <div style={{
+        position: 'absolute', top: 0, bottom: 0,
+        left: `${batonXPct}%`,
+        width: 2,
+        transform: `translateX(${-2 * (batonXPct / 100)}px)`,
+        background: 'rgba(255,255,255,0.95)',
+        boxShadow: '0 0 6px rgba(255,255,255,0.6)',
+        pointerEvents: 'none',
+        zIndex: 5,
+      }} />
+      {/* Detail / Section toggle. Lives in the top-right corner of the
+          surface so it doesn't fight with the corner mode label. The
+          one-character window-span label is enough information once the
+          user has used it twice; the tooltip carries the full intent. */}
+      <button
+        type="button"
+        title={toggleHint}
+        onClick={() => setView(otherView)}
+        style={{
+          position: 'absolute',
+          top: 6, right: 6,
+          padding: '2px 8px',
+          fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
+          color: 'rgba(255,255,255,0.85)',
+          background: 'rgba(0,0,0,0.5)',
+          border: '1px solid rgba(255,255,255,0.2)',
+          borderRadius: 4,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          backdropFilter: 'blur(4px)',
+          zIndex: 6,
+        }}
+      >
+        {toggleLabel}
+      </button>
+    </div>
+  );
+}
+
+// ─── AudioDashboard — live readout of "what is this audio right now" ──
+//
+// A compact two-row band that activates whenever audio-derived sidecars
+// are loaded (peaks and/or spectrogram). Visible across all modes —
+// the audio is the master clock even when the video frame is on screen,
+// so the user benefits from a numerical readout regardless of which
+// visual mode is active.
+//
+// Layout:
+//   ● bass-heavy · loud           ▁▂▄█▆▃▁ ← live mel sparkline
+//   E: 78  [55–82]  ƒ: 480Hz  [380–520]  ← numbers + 1s [min–max] ranges
+//
+// All values are read directly off the already-loaded sidecars. No
+// state, no setInterval, no rolling buffers — every render walks
+// ~100 frames of trailing window (≈ 1s at 10ms hop, ≈ 43 frames at
+// 23ms hop), which is sub-millisecond work. The sparkline paints
+// via canvas2D imperative paint (no per-bar React diff).
+//
+// Future home for Bruce's "tonal lift" idea ([[project-tonal-slope-transform]]):
+// the centroid Hz readout is the live signal that drives the auto-
+// build-from-pitch-trajectory transform concept. Watch it scrub through
+// a track to validate whether the signal carries the musical-intensity
+// information before committing to the transform.
+function AudioDashboard({ audioWaveform, spectrogram, currentMs }) {
+  const sparkRef = useRef(null);
+
+  const peaks = audioWaveform?.peaks;
+  const peaksHopMs = audioWaveform?.hopMs || 10;
+  const peakFrameIdx = peaks
+    ? Math.min(
+        peaks.length - 1,
+        Math.max(0, Math.floor((currentMs ?? 0) / peaksHopMs)),
+      )
+    : -1;
+
+  const cells = spectrogram?.cells;
+  const nMels = spectrogram?.nMels ?? 64;
+  const nFrames = spectrogram?.nFrames ?? 0;
+  const fmax = spectrogram?.fmax ?? 8000;
+  const specHopMs = spectrogram?.hopMs || 23;
+  const specFrameIdx = cells
+    ? Math.min(
+        nFrames - 1,
+        Math.max(0, Math.floor((currentMs ?? 0) / specHopMs)),
+      )
+    : -1;
+
+  // ── Energy: current + 1s [min–max] range ─────────────────────────
+  let energyCur = 0, energyMin = 0, energyMax = 0, hasEnergy = false;
+  if (peaks && peakFrameIdx >= 0) {
+    hasEnergy = true;
+    const halfWin = Math.round(500 / peaksHopMs);
+    const lo = Math.max(0, peakFrameIdx - halfWin);
+    const hi = Math.min(peaks.length, peakFrameIdx + halfWin);
+    let mn = 1, mx = 0;
+    for (let i = lo; i < hi; i += 1) {
+      const v = peaks[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    energyCur = peaks[peakFrameIdx] ?? 0;
+    energyMin = mn === 1 ? energyCur : mn;
+    energyMax = mx;
+  }
+
+  // ── Dominant band + centroid Hz from current mel frame ──────────
+  let dominantBand = null;
+  let centroidCur = 0, centroidMin = 0, centroidMax = 0, hasCentroid = false;
+  if (cells && specFrameIdx >= 0) {
+    hasCentroid = true;
+    centroidCur = _frameCentroidHz(cells, specFrameIdx, nMels, fmax);
+    dominantBand = _frameDominantBand(cells, specFrameIdx, nMels);
+
+    // Centroid 1s range — walk ~43 frames at 23ms hop, cheap.
+    const halfWin = Math.round(500 / specHopMs);
+    const lo = Math.max(0, specFrameIdx - halfWin);
+    const hi = Math.min(nFrames, specFrameIdx + halfWin);
+    let mn = fmax, mx = 0;
+    for (let f = lo; f < hi; f += 1) {
+      const hz = _frameCentroidHz(cells, f, nMels, fmax);
+      if (hz <= 0) continue;
+      if (hz < mn) mn = hz;
+      if (hz > mx) mx = hz;
+    }
+    centroidMin = mn === fmax ? centroidCur : mn;
+    centroidMax = mx;
+  }
+
+  // ── Sparkline canvas: current mel frame as 64 inline vertical bars ──
+  useEffect(() => {
+    const canvas = sparkRef.current;
+    if (!canvas || !cells || specFrameIdx < 0) return;
+    if (canvas.width !== nMels) canvas.width = nMels;
+    if (canvas.height !== 18) canvas.height = 18;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, nMels, 18);
+    // Warm orange to match the waveform mode — visually links the
+    // sparkline to the Audio mode's surface even when looking at
+    // Video or Spectro.
+    ctx.fillStyle = 'rgba(217,87,33,0.85)';
+    const offset = specFrameIdx * nMels;
+    for (let i = 0; i < nMels; i += 1) {
+      const v = cells[offset + i] / 255;
+      const h = Math.max(0.5, v * 18);
+      ctx.fillRect(i, 18 - h, 1, h);
+    }
+  }, [cells, specFrameIdx, nMels]);
+
+  // Hide entirely when no audio data — keeps Library scrub players /
+  // estim-only flows free of a dead-data band.
+  if (!hasEnergy && !hasCentroid) return null;
+
+  const energyLabel = hasEnergy ? _energyLabel(energyCur) : null;
+  const headlineLabel =
+    dominantBand && energyLabel
+      ? `${dominantBand} · ${energyLabel}`
+      : (dominantBand ?? energyLabel ?? '—');
+
+  return (
+    <div style={{
+      padding: '4px 10px 5px',
+      borderTop: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', gap: 2,
+      fontSize: 10.5, lineHeight: 1.3,
+      color: 'rgba(255,255,255,0.7)',
+      fontVariantNumeric: 'tabular-nums',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between', gap: 8,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+            background: hasEnergy && energyCur > 0.02
+              ? 'rgba(217,87,33,0.85)' : 'rgba(255,255,255,0.25)',
+          }} />
+          <span style={{ color: 'var(--text)', fontWeight: 500 }}>
+            {headlineLabel}
+          </span>
+        </div>
+        {hasCentroid && (
+          <canvas
+            ref={sparkRef}
+            title="Current mel spectrum"
+            style={{
+              width: 72, height: 18,
+              imageRendering: 'auto',
+              background: 'rgba(0,0,0,0.35)',
+              borderRadius: 2,
+            }}
+          />
+        )}
+      </div>
+      <div className="mono" style={{
+        display: 'flex', gap: 14, fontSize: 9.5,
+        color: 'rgba(255,255,255,0.55)',
+      }}>
+        {hasEnergy && (
+          <span>
+            <span style={{ opacity: 0.6 }}>E:</span>{' '}
+            <span style={{ color: 'rgba(255,255,255,0.95)' }}>
+              {Math.round(energyCur * 100)}
+            </span>{' '}
+            <span style={{ opacity: 0.55 }}>
+              [{Math.round(energyMin * 100)}–{Math.round(energyMax * 100)}]
+            </span>
+          </span>
+        )}
+        {hasCentroid && centroidCur > 0 && (
+          <span>
+            <span style={{ opacity: 0.6 }}>ƒ:</span>{' '}
+            <span style={{ color: 'rgba(255,255,255,0.95)' }}>
+              {centroidCur}Hz
+            </span>{' '}
+            <span style={{ opacity: 0.55 }}>
+              [{centroidMin}–{centroidMax}]
+            </span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function _frameCentroidHz(cells, frameIdx, nMels, fmax) {
+  // ∑(bin_index × bin_energy) / ∑(bin_energy). Approximate Hz by
+  // linearly mapping the average bin index across [0, fmax]; mel scale
+  // is logarithmic so this is a rough display value rather than a
+  // physical centroid. For a readout it's enough; if Bruce's
+  // tonal-slope transform ever needs precise Hz we lift the librosa
+  // mel_frequencies LUT into the sidecar and look up.
+  const offset = frameIdx * nMels;
+  let sum = 0;
+  let weighted = 0;
+  for (let i = 0; i < nMels; i += 1) {
+    const v = cells[offset + i];
+    sum += v;
+    weighted += v * i;
+  }
+  if (sum < 8) return 0;
+  const avgBin = weighted / sum;
+  return Math.round((avgBin / (nMels - 1)) * fmax);
+}
+
+function _frameDominantBand(cells, frameIdx, nMels) {
+  const offset = frameIdx * nMels;
+  const split1 = Math.floor(nMels / 3);
+  const split2 = Math.floor((nMels * 2) / 3);
+  let low = 0, mid = 0, high = 0;
+  for (let i = 0; i < split1; i += 1) low += cells[offset + i];
+  for (let i = split1; i < split2; i += 1) mid += cells[offset + i];
+  for (let i = split2; i < nMels; i += 1) high += cells[offset + i];
+  const total = low + mid + high;
+  if (total < 24) return 'silent';
+  const max = Math.max(low, mid, high);
+  // Single dominant band (>50% of total energy)
+  if (max === low && low > total * 0.5) return 'bass-heavy';
+  if (max === mid && mid > total * 0.5) return 'vocal range';
+  if (max === high && high > total * 0.5) return 'high-pitched';
+  // Two-band dominance
+  if (low + mid > total * 0.75) return 'bass+mid';
+  if (mid + high > total * 0.75) return 'mid+high';
+  return 'broadband';
+}
+
+function _energyLabel(v) {
+  if (v < 0.02) return 'silent';
+  if (v < 0.2) return 'quiet';
+  if (v < 0.5) return 'moderate';
+  if (v < 0.85) return 'loud';
+  return 'peak';
+}
+
+function SpectrogramPlaceholder() {
+  // Shown when the .spectrogram.json sidecar is absent — the viewer
+  // can't compute on demand under the new architecture (sidecars are
+  // built by videoflow.structural.auto_chapter during chapter analysis).
+  // Empty state nudges the user toward the action that produces it.
+  return (
+    <div style={{
+      position: 'absolute', inset: 0,
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      gap: 6,
+      color: 'rgba(255,255,255,0.55)',
+      fontSize: 11, lineHeight: 1.4,
+      background: '#000004',
+      textAlign: 'center', padding: 14,
+    }}>
+      <div style={{ fontSize: 22, opacity: 0.55 }}>🎵</div>
+      <div>Spectrogram not built yet.</div>
+      <div style={{ opacity: 0.7, fontSize: 10 }}>
+        Run “Analyze with videoflow” on the Chapters tab —
+        spectrogram is built alongside chapter detection.
+      </div>
+    </div>
   );
 }
 

@@ -31,6 +31,13 @@
 //                       SpectrogramCanvas reads its own 12s window
 //                       around currentMs — no chapter-scope slicing
 //                       needed from the consumer.
+//   beats             {bpm, beatsMs: number[], downbeatsMs: ...}  optional
+//                       Pre-computed beat times from
+//                       videoflow.audio_beats. AudioDashboard reads
+//                       `bpm` to surface the music tempo; the visible
+//                       beat-tick overlay on the waveform was removed
+//                       2026-05-22 — beat editing is forgegen / Beatflo
+//                       territory, the Chapters tab doesn't need it.
 //   chapter           {id, title, color, start, end}         optional
 //                       When set, the baton position is computed
 //                       relative to chapter.start/end instead of
@@ -93,7 +100,7 @@
 //                       currentMs back.
 //   width             number (px)                             default 240
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Segmented } from './primitives.jsx';
 import { Sparkline } from './Charts.jsx';
 
@@ -156,6 +163,7 @@ const MAGMA_LUT = (() => {
 export function MediaViewer({
   audioWaveform,
   spectrogram,
+  beats,
   chapter,
   currentMs = 0,
   defaultMode = 'video',
@@ -209,6 +217,20 @@ export function MediaViewer({
   showTimecode = true,
   totalMs,
   videoSrc,
+  // External "loading" hint — when set, an overlay is shown with this
+  // text. Used by ChaptersTab to surface the chapter byte-range pre-
+  // warm ("Loading chapter…") that primes the kernel page cache before
+  // playback. Distinct from internal `isBuffering` (mid-playback decode
+  // stalls) — when both fire, the explicit label wins.
+  loadingLabel = null,
+  // When `videoSrc` is a chapter-extracted temp clip (rather than the
+  // original full-length media), this offset says what original-ms
+  // position the clip's internal time 0 corresponds to. The consumer
+  // continues to think in original-ms throughout (currentMs / onSeek /
+  // onTimeChange are all original-ms); MediaViewer translates to
+  // clip-relative video.currentTime internally. Default 0 = original
+  // media (no offset).
+  videoSrcOffsetMs = 0,
   width = 240,
   // Back-compat aliases. Older callers may pass onCreateChapter /
   // showCreateChapter; we accept them transparently. Drop after the
@@ -259,6 +281,14 @@ export function MediaViewer({
   // and "playback stalled" cases — they both reduce to "user intends
   // to play, video isn't ready yet, resume when it is."
   const pendingPlayRef = useRef(false);
+  // Visible state: are we waiting on the decoder/disk to catch up? Set
+  // when `waiting` fires (mid-playback stall) or when play() is deferred
+  // for buffer reasons. Cleared once tryResume actually starts playback.
+  // Surfaces as a small "Buffering…" overlay so long-file users (90min+
+  // / 18GB files) can tell the difference between a stutter (frame drops
+  // while playback continues) and a buffer pause (we paused to wait for
+  // disk I/O). Without this UI both presented identically.
+  const [isBuffering, setIsBuffering] = useState(false);
 
   // Play / pause sync. video.play() returns a Promise that rejects on
   // autoplay block, codec failure, decode error, etc. We log the
@@ -281,6 +311,7 @@ export function MediaViewer({
     if (isPlaying) {
       if (v.readyState >= 4 /* HAVE_ENOUGH_DATA */) {
         pendingPlayRef.current = false;
+        setIsBuffering(false);
         const p = v.play();
         if (p && typeof p.catch === 'function') {
           p.catch((err) => {
@@ -290,9 +321,11 @@ export function MediaViewer({
       } else {
         // Defer — the buffer-readiness handler below will pick this up.
         pendingPlayRef.current = true;
+        setIsBuffering(true);
       }
     } else {
       pendingPlayRef.current = false;
+      setIsBuffering(false);
       v.pause();
     }
   }, [isPlaying, videoSrc]);
@@ -307,16 +340,37 @@ export function MediaViewer({
   // setCurrentMs, etc. 80ms is comfortably above the jitter and below
   // perceptible drift.
   const SEEK_TOLERANCE_MS = 80;
+  // Tracks the last currentMs value WE emitted via the timeupdate
+  // handler. Used by the seek-sync effect to distinguish an external
+  // seek (chapter switch, scrub) from an echo of our own emit
+  // bouncing back through the consumer. Without this gate, the
+  // throttle-induced lag between v.currentTime (live) and the parent's
+  // currentMs prop (stale by ~one throttle interval) tricks the drift
+  // check into seeking backward on every render — observed 2026-05-22
+  // as a 5Hz waiting/resume ping-pong producing the choppy playback
+  // the user flagged on chapters 3/7. The video's clock is master
+  // while playing; our own emits don't justify a re-seek.
+  const lastEmittedMsRef = useRef(0);
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !videoSrc) return;
-    const targetSec = (currentMs ?? 0) / 1000;
+    // Ignore echoes of our own timeupdate emit. Tolerance covers one
+    // throttle interval (250ms) plus React/render latency; anything
+    // bigger is genuinely an external seek the consumer requested.
+    const echoMs = Math.abs((currentMs ?? 0) - lastEmittedMsRef.current);
+    if (echoMs < 400) return;
+    // currentMs is in the original-media timeline. Subtract the offset
+    // to get clip-relative seconds — when the src is the full file,
+    // offset is 0 so this is a no-op. When the src is a chapter clip,
+    // offset shifts the timeline so clip second 0 = chapter.atMs.
+    const clipMs = (currentMs ?? 0) - (videoSrcOffsetMs || 0);
+    const targetSec = Math.max(0, clipMs) / 1000;
     if (Number.isNaN(targetSec)) return;
-    const driftMs = Math.abs(v.currentTime * 1000 - currentMs);
+    const driftMs = Math.abs(v.currentTime * 1000 - clipMs);
     if (driftMs > SEEK_TOLERANCE_MS) {
       try { v.currentTime = targetSec; } catch { /* readyState gate not met */ }
     }
-  }, [currentMs, videoSrc]);
+  }, [currentMs, videoSrc, videoSrcOffsetMs]);
 
   // Time-update emitter. The <video> drives the master clock when it's
   // playing — onTimeChange fires per video frame (Chromium delivers
@@ -327,10 +381,40 @@ export function MediaViewer({
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return undefined;
-    const handler = () => onTimeChange?.(v.currentTime * 1000);
+    // Throttle the consumer-facing timeupdate emitter to 10Hz. The
+    // diagnostic with the emitter disabled (2026-05-21) proved that
+    // the React re-render cascade triggered by setCurrentMs on every
+    // video frame was starving Chromium's video decoder, causing the
+    // long-file stutter. Chromium fires `timeupdate` at ~4-5Hz when
+    // playing but can burst higher on certain transitions; the
+    // throttle caps the cost regardless of source rate.
+    // Baton / timecode / funscript-tape updates at 10Hz look smooth;
+    // the underlying video plays at its native frame rate.
+    // 250ms / 4Hz cap. Tried 100ms (10Hz) after gating AudioDashboard
+    // by mode but the user reported stop-motion playback + buffering
+    // cycling on Euphoria 2026-05-22. 4Hz is the compromise: baton
+    // still moves faster than the previous 2Hz (500ms) without the
+    // 10Hz render pressure. If 4Hz still stutters the cause isn't
+    // the throttle; check Console for `<video> error` codes.
+    // Architectural rule for every LQR app using React + HTML5 video:
+    // never let `timeupdate` drive React renders unthrottled.
+    const THROTTLE_MS = 250;
+    let lastEmit = 0;
+    const handler = () => {
+      const now = performance.now();
+      if (now - lastEmit < THROTTLE_MS) return;
+      lastEmit = now;
+      // Re-add the chapter-clip offset before reporting back to the
+      // consumer so currentMs stays in the original-media timeline.
+      const emitted = v.currentTime * 1000 + (videoSrcOffsetMs || 0);
+      // Record what we emit so the seek-sync effect can ignore the
+      // echo when the consumer re-renders us with this value.
+      lastEmittedMsRef.current = emitted;
+      onTimeChange?.(emitted);
+    };
     v.addEventListener('timeupdate', handler);
     return () => v.removeEventListener('timeupdate', handler);
-  }, [onTimeChange]);
+  }, [onTimeChange, videoSrcOffsetMs]);
 
   // Buffer-pause + deferred-play promoter. Two paths into the same
   // resume logic:
@@ -362,6 +446,7 @@ export function MediaViewer({
     if (!v || !videoSrc) return undefined;
     const onWaiting = () => {
       pendingPlayRef.current = true;
+      setIsBuffering(true);
       if (!v.paused) {
         try { v.pause(); } catch { /* swallow */ }
       }
@@ -375,20 +460,98 @@ export function MediaViewer({
       if (!isPlayingRef.current) {
         // User changed their mind while we were buffering — drop intent.
         pendingPlayRef.current = false;
+        setIsBuffering(false);
         return;
       }
       pendingPlayRef.current = false;
+      setIsBuffering(false);
       if (v.paused) {
         const p = v.play();
         if (p && typeof p.catch === 'function') p.catch(() => { /* swallow */ });
       }
     };
+    // Video element error / source-load failure surfaces here. The
+    // mediaError carries an MediaError object whose .code maps to:
+    //   1 = MEDIA_ERR_ABORTED, 2 = NETWORK, 3 = DECODE, 4 = SRC_NOT_SUPPORTED.
+    // For chapter clips: code 4 means the asset:// URL didn't resolve
+    // (file path / protocol scope), code 3 means ffmpeg produced a
+    // file Chromium can't decode.
+    const onError = () => {
+      const err = v.error;
+      // Log message + src as separate console args so DevTools shows the
+      // full strings (object-nested props get truncated at ~80 chars).
+      // Chromium's PIPELINE_ERROR_DECODE includes diagnostic context
+      // ("Failed to send buffer", first-packet metadata, etc.) that we
+      // need verbatim to root-cause the failure.
+      console.warn(
+        'MediaViewer: <video> error code:', err?.code,
+        '\nmessage:', err?.message,
+        '\nsrc:', v.currentSrc || v.src,
+      );
+    };
+    v.addEventListener('error', onError);
     v.addEventListener('waiting', onWaiting);
     v.addEventListener('canplay', tryResume);
     v.addEventListener('canplaythrough', tryResume);
     v.addEventListener('playing', tryResume);
     v.addEventListener('loadeddata', tryResume);
+
+    // Buffer watchdog. Chromium / WebView2 silently drops frames on
+    // long high-bitrate files (18GB Angel Anjelica, 90min Victoria
+    // Oaks): the decoder stays just above the "empty" threshold so
+    // `waiting` never fires, but disk I/O can't feed the decoder fast
+    // enough so frames get skipped. The user sees stutter; the official
+    // event API tells us nothing. So poll `v.buffered` ourselves — if
+    // the forward buffer at the playhead drops below FORWARD_THRESHOLD
+    // seconds, treat it as buffering and pause until we have
+    // RESUME_THRESHOLD seconds of headroom.
+    //
+    // Threshold tuning: small gap avoids flicker; small absolute number
+    // avoids "frozen on buffering" when the buffer can't climb high
+    // enough fast enough. 1.5s pause / 5s resume = ~3.5s of buffer
+    // headroom when we resume, enough for ~3s of play before the
+    // watchdog fires again. Visible cycle but playback actually
+    // progresses, which is the floor we couldn't get below with
+    // larger thresholds on the user's 18GB / 90min files.
+    // Skip the watchdog entirely for blob: sources. Blob URLs read
+    // from JS-heap memory — there's no disk I/O bottleneck the
+    // watchdog could correct, only decoder pace. The watchdog
+    // interpreted decoder pace as buffer starvation, paused, decode
+    // caught up during the pause, watchdog resumed, repeat every
+    // 200ms — the watchdog itself was producing the visible flicker
+    // on blob-backed chapter clips. Trust Chromium when bytes are
+    // already in RAM.
+    const isBlobSrc = typeof videoSrc === 'string' && videoSrc.startsWith('blob:');
+    const FORWARD_THRESHOLD = 1.5;
+    const RESUME_THRESHOLD = 5.0;
+    const watchdog = isBlobSrc ? null : setInterval(() => {
+      if (!v || v.ended) return;
+      let forward = 0;
+      for (let i = 0; i < v.buffered.length; i += 1) {
+        const start = v.buffered.start(i);
+        const end = v.buffered.end(i);
+        if (start <= v.currentTime + 0.05 && v.currentTime <= end + 0.05) {
+          forward = end - v.currentTime;
+          break;
+        }
+      }
+      if (!v.paused && forward < FORWARD_THRESHOLD) {
+        // Forward buffer is too thin to sustain smooth playback.
+        // Pause and mark as buffering; resume gate above will pick
+        // it up when readyState climbs back to HAVE_ENOUGH_DATA.
+        pendingPlayRef.current = true;
+        setIsBuffering(true);
+        try { v.pause(); } catch { /* swallow */ }
+      } else if (v.paused && pendingPlayRef.current && forward >= RESUME_THRESHOLD) {
+        // Forward buffer recovered. Resume via the normal tryResume
+        // path so all the readiness gates fire consistently.
+        tryResume();
+      }
+    }, 200);
+
     return () => {
+      if (watchdog !== null) clearInterval(watchdog);
+      v.removeEventListener('error', onError);
       v.removeEventListener('waiting', onWaiting);
       v.removeEventListener('canplay', tryResume);
       v.removeEventListener('canplaythrough', tryResume);
@@ -515,7 +678,7 @@ export function MediaViewer({
             // the transport (user activation flows through to the
             // effect that calls v.play()).
             playsInline
-            preload="metadata"
+            preload="auto"
             style={{
               position: 'absolute', inset: 0,
               width: '100%', height: '100%',
@@ -532,7 +695,11 @@ export function MediaViewer({
         {mode === 'video' && !videoSrc && <VideoPoster title={media.title} />}
         {mode === 'audio' && (
           audioWaveform
-            ? <WaveformCanvas waveform={audioWaveform} currentMs={currentMs} />
+            ? <WaveformCanvas
+                waveform={audioWaveform}
+                spectrogram={spectrogram}
+                currentMs={currentMs}
+              />
             : <AudioWavePlaceholder />
         )}
         {mode === 'spectrogram' && (
@@ -577,6 +744,29 @@ export function MediaViewer({
             retired 2026-05-21 when WaveformCanvas moved to absolute-
             window canvas2D and stopped needing the parent's batonPos. */}
 
+        {/* Loading / buffering indicator. Two sources:
+            - `loadingLabel` (external) — e.g. ChaptersTab pre-warming
+              the chapter's byte range in the kernel page cache.
+            - `isBuffering` (internal) — mid-playback decoder stall
+              caught by the buffer watchdog.
+            External label wins when both fire; otherwise the generic
+            "Buffering…" text covers the mid-play case. */}
+        {(loadingLabel || isBuffering) && (
+          <div style={{
+            position: 'absolute', top: '50%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            padding: '6px 12px',
+            borderRadius: 14,
+            background: 'rgba(0,0,0,0.65)',
+            border: '1px solid rgba(255,255,255,0.18)',
+            color: 'rgba(255,255,255,0.92)',
+            fontSize: 11, fontWeight: 500, letterSpacing: '0.04em',
+            pointerEvents: 'none', zIndex: 8,
+          }}>
+            {loadingLabel || 'Buffering…'}
+          </div>
+        )}
+
         {/* Corner mode label — redundant with the toggle but useful
             when the toggle is hidden via showModeToggle=false. Opt out
             via showModeLabel=false in places where both are shown. */}
@@ -605,15 +795,21 @@ export function MediaViewer({
       </div>
 
       {/* Audio dashboard — live "what is this audio right now" readout.
-          Renders only when sidecar data is loaded; quiet no-op otherwise.
-          Visible across all modes since audio is the master clock even
-          when the video frame is on screen. See AudioDashboard component
-          below for the full rationale. */}
-      <AudioDashboard
-        audioWaveform={audioWaveform}
-        spectrogram={spectrogram}
-        currentMs={currentMs}
-      />
+          Renders only in Audio + Spectro modes (where the user is
+          already studying audio). In Video / Funscript modes the
+          per-render energy/centroid walk is cost we don't need — the
+          dashboard's React work at every timeupdate was confirmed
+          2026-05-21 to starve Chromium's video decoder on long files
+          (90min+ / 18GB sources). Gating by mode keeps the dashboard
+          for the modes where it earns its keep, zero cost otherwise. */}
+      {(mode === 'audio' || mode === 'spectrogram') && (
+        <AudioDashboard
+          audioWaveform={audioWaveform}
+          spectrogram={spectrogram}
+          beats={beats}
+          currentMs={currentMs}
+        />
+      )}
 
       {/* Prominent centered timecode — HH:MM:SS.mmm. Drives off `currentMs`,
           so it ticks at whatever rate the consumer drives playback. The
@@ -802,7 +998,15 @@ function FunscriptPlaceholder() {
 // floor(timeMs / hopMs)). Visible window = 12s around currentMs,
 // clamped to track bounds. Baton sits roughly centered, with the same
 // edge-clamp + translateX shift as FunscriptBeatWindow.
-function WaveformCanvas({ waveform, currentMs, windowMs = 12000 }) {
+//
+// Optional `spectrogram` prop: if provided, each peak bar gets colored
+// by the audio's frequency distribution at that moment (bass = warm
+// orange, vocal range = yellow-green, treble = cyan-blue, broadband =
+// blended). This turns the waveform into a frequency-aware overview
+// without an extra mode — you see WHERE the audio sits in addition to
+// HOW LOUD it is. Same DaVinci-style aesthetic. Falls back to solid
+// orange when the spectrogram sidecar isn't loaded.
+function WaveformCanvas({ waveform, spectrogram, currentMs, windowMs = 12000 }) {
   const canvasRef = useRef(null);
 
   const peaks = waveform?.peaks;
@@ -815,6 +1019,65 @@ function WaveformCanvas({ waveform, currentMs, windowMs = 12000 }) {
       ? Math.max(1, Math.round(durationMs / peaks.length))
       : 10
   );
+
+  // Precomputed per-peak RGB color cache, derived once from the
+  // spectrogram (NOT recomputed every paint). Without this cache the
+  // colorize loop was doing nMels = 64 cell reads + 3 band sums + a
+  // template-literal fillStyle string + a fillStyle parse per bar at
+  // ~1200 bars/paint × 5Hz, which re-introduced the playback stutter
+  // canvas2D was supposed to fix. Precomputing reduces hot-loop work
+  // to one Uint8Array read per channel + a cheap int comparison.
+  const peakColors = useMemo(() => {
+    if (!peaks || peaks.length === 0) return null;
+    const specCells = spectrogram?.cells;
+    const specHopMs = spectrogram?.hopMs ?? 0;
+    const specNMels = spectrogram?.nMels ?? 0;
+    const specNFrames = spectrogram?.nFrames ?? 0;
+    if (!specCells || specHopMs <= 0 || specNMels <= 0 || specNFrames <= 0) {
+      return null;
+    }
+    const split1 = Math.floor(specNMels / 3);
+    const split2 = Math.floor((specNMels * 2) / 3);
+    const n = peaks.length;
+    // Flat Uint8Array of [r, g, b] per peak frame. 30-min track at
+    // 10ms hop = 180,000 peaks × 3 bytes = 540KB. Held for the
+    // lifetime of the spectrogram identity, freed on project change.
+    const out = new Uint8Array(n * 3);
+    let lastSpecIdx = -1;
+    let cachedR = 217, cachedG = 87, cachedB = 33;
+    for (let p = 0; p < n; p += 1) {
+      const timeMs = p * hopMs;
+      const specIdx = Math.floor(timeMs / specHopMs);
+      if (specIdx !== lastSpecIdx) {
+        if (specIdx < 0 || specIdx >= specNFrames) {
+          cachedR = 217; cachedG = 87; cachedB = 33;
+        } else {
+          const offset = specIdx * specNMels;
+          let bass = 0, mid = 0, high = 0;
+          for (let i = 0; i < split1; i += 1) bass += specCells[offset + i];
+          for (let i = split1; i < split2; i += 1) mid += specCells[offset + i];
+          for (let i = split2; i < specNMels; i += 1) high += specCells[offset + i];
+          const total = bass + mid + high;
+          if (total <= 24) {
+            cachedR = 217; cachedG = 87; cachedB = 33;
+          } else {
+            const br = bass / total;
+            const mr = mid / total;
+            const hr = high / total;
+            cachedR = Math.round(217 * br + 200 * mr +  70 * hr);
+            cachedG = Math.round( 87 * br + 200 * mr + 160 * hr);
+            cachedB = Math.round( 33 * br +  80 * mr + 230 * hr);
+          }
+        }
+        lastSpecIdx = specIdx;
+      }
+      const o = p * 3;
+      out[o] = cachedR;
+      out[o + 1] = cachedG;
+      out[o + 2] = cachedB;
+    }
+    return out;
+  }, [peaks, spectrogram, hopMs]);
 
   // Visible window — computed in render so the baton overlay and the
   // canvas paint use the exact same range. Cheap math, no allocations.
@@ -852,17 +1115,43 @@ function WaveformCanvas({ waveform, currentMs, windowMs = 12000 }) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, visibleFrames, internalHeight);
 
-    // Symmetric bars around the canvas mid-line. fillRect once per
-    // frame — at 12s × 100 peaks/sec = 1200 frames, well within
-    // canvas2D's comfort zone (sub-millisecond paint).
-    ctx.fillStyle = 'rgba(217,87,33,0.75)';
+    // Paint loop reads from the precomputed `peakColors` cache (built
+    // once per spectrogram-identity change in the useMemo above). The
+    // earlier in-loop implementation that summed mel bands + built a
+    // template-literal fillStyle per bar was the actual stutter cause —
+    // ~1200 bars × (64 cell reads + 3 sums + string alloc) × 5Hz was
+    // ~5–10ms of jank per paint, enough to starve the video decoder.
     const midY = internalHeight / 2;
-    for (let t = 0; t < visibleFrames; t += 1) {
-      const v = peaks[startFrame + t] ?? 0;
-      const halfH = Math.max(0.5, v * (internalHeight / 2));
-      ctx.fillRect(t, midY - halfH, 1, halfH * 2);
+    if (peakColors) {
+      // Color path. fillStyle changes are coalesced for sustained
+      // passages (kick / sustained vocal / etc.) so a 1200-bar paint
+      // typically does <50 fillStyle assignments + fillRect calls.
+      let lastR = -1, lastG = -1, lastB = -1;
+      for (let t = 0; t < visibleFrames; t += 1) {
+        const peakFrame = startFrame + t;
+        const v = peaks[peakFrame] ?? 0;
+        const co = peakFrame * 3;
+        const r = peakColors[co];
+        const g = peakColors[co + 1];
+        const b = peakColors[co + 2];
+        if (r !== lastR || g !== lastG || b !== lastB) {
+          ctx.fillStyle = `rgba(${r},${g},${b},0.78)`;
+          lastR = r; lastG = g; lastB = b;
+        }
+        const halfH = Math.max(0.5, v * (internalHeight / 2));
+        ctx.fillRect(t, midY - halfH, 1, halfH * 2);
+      }
+    } else {
+      // Solid-orange fallback when no spectrogram is loaded.
+      ctx.fillStyle = 'rgba(217,87,33,0.75)';
+      for (let t = 0; t < visibleFrames; t += 1) {
+        const v = peaks[startFrame + t] ?? 0;
+        const halfH = Math.max(0.5, v * (internalHeight / 2));
+        ctx.fillRect(t, midY - halfH, 1, halfH * 2);
+      }
     }
-  }, [peaks, durationMs, hopMs, windowStart, windowMs]);
+
+  }, [peaks, durationMs, hopMs, windowStart, windowMs, peakColors]);
 
   if (!peaks || peaks.length === 0) return <AudioWavePlaceholder />;
 
@@ -1104,7 +1393,8 @@ function SpectrogramCanvas({ spectrogram, currentMs, windowMs }) {
 // build-from-pitch-trajectory transform concept. Watch it scrub through
 // a track to validate whether the signal carries the musical-intensity
 // information before committing to the transform.
-function AudioDashboard({ audioWaveform, spectrogram, currentMs }) {
+function AudioDashboard({ audioWaveform, spectrogram, beats, currentMs }) {
+  const bpm = beats?.bpm > 0 ? Math.round(beats.bpm) : null;
   const sparkRef = useRef(null);
 
   const peaks = audioWaveform?.peaks;
@@ -1211,14 +1501,29 @@ function AudioDashboard({ audioWaveform, spectrogram, currentMs }) {
       <div style={{
         display: 'flex', alignItems: 'center',
         justifyContent: 'space-between', gap: 8,
+        // nowrap — when the headline gets long ("broadband · moderate"),
+        // we'd rather truncate with ellipsis than wrap onto two lines.
+        // Wrapping was shifting the viewer's vertical layout frame-to-
+        // frame as the classification label changed.
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          // minWidth: 0 lets the flex child shrink below its content
+          // size so ellipsis kicks in instead of overflowing.
+          minWidth: 0,
+        }}>
           <span style={{
-            display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+            display: 'inline-block', flexShrink: 0,
+            width: 6, height: 6, borderRadius: '50%',
             background: hasEnergy && energyCur > 0.02
               ? 'rgba(217,87,33,0.85)' : 'rgba(255,255,255,0.25)',
           }} />
-          <span style={{ color: 'var(--text)', fontWeight: 500 }}>
+          <span style={{
+            color: 'var(--text)', fontWeight: 500,
+            overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
             {headlineLabel}
           </span>
         </div>
@@ -1227,6 +1532,7 @@ function AudioDashboard({ audioWaveform, spectrogram, currentMs }) {
             ref={sparkRef}
             title="Current mel spectrum"
             style={{
+              flexShrink: 0,
               width: 72, height: 18,
               imageRendering: 'auto',
               background: 'rgba(0,0,0,0.35)',
@@ -1238,9 +1544,14 @@ function AudioDashboard({ audioWaveform, spectrogram, currentMs }) {
       <div className="mono" style={{
         display: 'flex', gap: 14, fontSize: 9.5,
         color: 'rgba(255,255,255,0.55)',
+        // Same anti-wrap treatment. Each value span is a flex child;
+        // if the row truly can't fit at any width, the ƒ readout
+        // (last child) clips first via overflow.
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
       }}>
         {hasEnergy && (
-          <span>
+          <span style={{ flexShrink: 0 }}>
             <span style={{ opacity: 0.6 }}>E:</span>{' '}
             <span style={{ color: 'rgba(255,255,255,0.95)' }}>
               {Math.round(energyCur * 100)}
@@ -1251,7 +1562,7 @@ function AudioDashboard({ audioWaveform, spectrogram, currentMs }) {
           </span>
         )}
         {hasCentroid && centroidCur > 0 && (
-          <span>
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
             <span style={{ opacity: 0.6 }}>ƒ:</span>{' '}
             <span style={{ color: 'rgba(255,255,255,0.95)' }}>
               {centroidCur}Hz
@@ -1259,6 +1570,12 @@ function AudioDashboard({ audioWaveform, spectrogram, currentMs }) {
             <span style={{ opacity: 0.55 }}>
               [{centroidMin}–{centroidMax}]
             </span>
+          </span>
+        )}
+        {bpm != null && (
+          <span style={{ flexShrink: 0 }} title="Music BPM (from beats sidecar)">
+            <span style={{ opacity: 0.6 }}>♩</span>{' '}
+            <span style={{ color: 'rgba(255,255,255,0.95)' }}>{bpm}</span>
           </span>
         )}
       </div>

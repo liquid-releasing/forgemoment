@@ -30,6 +30,7 @@
 // a phrase). The vocabulary differs; the component doesn't.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNativeWheel } from './hooks/useNativeWheel.js';
 import { Icon } from './primitives.jsx';
 import { Sparkline } from './Charts.jsx';
 
@@ -152,10 +153,13 @@ export function ChapterRibbon({
   // active center turns the wheel into a clean "more or less context
   // around what I'm editing" knob. Selection (clicking another band) is
   // the only way to change which chapter sits in the center.
+  //
+  // Attached via the `useNativeWheel` hook (passive: false) because
+  // React's onWheel is passive-by-default, which silently makes
+  // preventDefault a no-op. Without the override, wheeling over the
+  // ribbon scrolls the outer page — the bug the user flagged
+  // 2026-05-21.
   const handleWheel = (e) => {
-    // When zoomable is off, let the wheel event bubble so the page can
-    // scroll naturally. Don't preventDefault — that would trap scroll
-    // inside an inert ribbon.
     if (!zoomable) return;
     if (sortedBands.length === 0 || !active) return;
     e.preventDefault();
@@ -176,6 +180,9 @@ export function ChapterRibbon({
     setViewStart(nextStart);
     setViewEnd(nextEnd);
   };
+
+  const plotRef = useRef(null);
+  useNativeWheel(plotRef, handleWheel);
 
   // Selection change → snap the viewport to re-center on the new active
   // chapter. Preserve the current zoom span when possible; if the new
@@ -239,7 +246,7 @@ export function ChapterRibbon({
           showAxes is false). Wheel attaches here so the gutter doesn't
           capture zoom gestures. */}
       <div
-        onWheel={handleWheel}
+        ref={plotRef}
         style={{
           position: 'absolute',
           left: yAxisPx, right: 0, top: 0,

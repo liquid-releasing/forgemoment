@@ -59,6 +59,10 @@ export {
 // 08's window.FF_TRANSFORMS / window.FF_TAGS).
 export { TransformPanel } from './TransformPanel.jsx';
 
+// Hooks — small reusable React hooks. Kept under src/hooks/ so the
+// library's top-level src/ stays a list of components.
+export { useNativeWheel } from './hooks/useNativeWheel.js';
+
 // Charts — visualisation primitives. Charts.jsx is fully carved out as
 // of v0.0.2 (the iter 08 source has no remaining unported components).
 export {

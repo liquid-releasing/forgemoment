@@ -67,39 +67,52 @@ export function ChapterContextStrip({
 }) {
   return (
     <div style={{
-      padding: '12px 22px 14px',
-      background: 'var(--surface)',
-      borderBottom: '1px solid var(--border)',
+      // Transparent zero-padding wrapper — the strip is just the rounded
+      // StripBody panel when no header content. Consumers that pass a
+      // header still get the header row above with consistent spacing.
+      // Background is page-bg by inheritance; the panel inside is the
+      // only "lifted" surface.
+      background: 'transparent',
       flexShrink: 0,
     }}>
-      {/* Header row — consumer content on the left, collapse button on the right */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>{header}</div>
-        {onToggleExpanded && (
-          <button
-            onClick={onToggleExpanded}
-            title={expanded ? 'Collapse' : 'Expand'}
-            aria-label={expanded ? 'Collapse' : 'Expand'}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              padding: '4px 8px', borderRadius: 5,
-              background: 'transparent',
-              border: '1px solid var(--border)',
-              color: 'var(--text-dim)',
-              cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
-            }}
-          >
-            <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} />
-            {expanded ? 'Collapse' : 'Expand'}
-          </button>
-        )}
-      </div>
+      {/* Header row renders only if there's content. Consumers that move
+          the title into a tab-level row above the strip pass header=null
+          and onToggleExpanded=null (handled here as undefined), so this
+          row is fully omitted and the StripBody panel's top sits flush
+          with the grid cell — matching the MediaViewer's top in the
+          adjacent cell. */}
+      {(header || onToggleExpanded) && (
+        <div style={{
+          display: 'flex', alignItems: 'baseline', gap: 'var(--s-2)',
+          padding: 'var(--s-3) var(--s-5) 0',
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>{header}</div>
+          {onToggleExpanded && (
+            <button
+              onClick={onToggleExpanded}
+              title={expanded ? 'Collapse' : 'Expand'}
+              aria-label={expanded ? 'Collapse' : 'Expand'}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '4px 8px', borderRadius: 5,
+                background: 'transparent',
+                border: '1px solid var(--border)',
+                color: 'var(--text-dim)',
+                cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+              }}
+            >
+              <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} />
+              {expanded ? 'Collapse' : 'Expand'}
+            </button>
+          )}
+        </div>
+      )}
 
-      {expanded && headerExtra && <div>{headerExtra}</div>}
+      {expanded && headerExtra && <div style={{ padding: '0 var(--s-5)' }}>{headerExtra}</div>}
 
       {expanded && (
         <div style={{
-          marginTop: 10,
+          marginTop: (header || onToggleExpanded || headerExtra) ? 'var(--s-2)' : 0,
           display: media?.src ? 'grid' : 'block',
           // Viewer on the right (~300px) when media is present; waveform
           // takes the remaining space. Single column otherwise.

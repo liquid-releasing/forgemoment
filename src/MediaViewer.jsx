@@ -589,10 +589,30 @@ export function MediaViewer({
     // 2026-05-14: "frame-forward looked broken because playback
     // continued past the new position."
     if (isPlaying) onPlayPause?.();
-    // ~30 fps step (33ms). Frame jog is consumer-tunable via onSeek.
-    onSeek?.((currentMs || 0) + dir * 33);
+    // ~30 fps step (33ms). The 33ms delta is smaller than both the
+    // seek-sync drift tolerance (80ms) and the echo gate (400ms), so
+    // going through onSeek alone never moves the <video>. Move it
+    // directly here, then mirror to the parent via onSeek so baton /
+    // timecode / funscript-tape catch up. The seek-sync effect will
+    // see drift=0 on the next render and no-op.
+    const newMs = (currentMs || 0) + dir * 33;
+    const v = videoRef.current;
+    if (v && videoSrc) {
+      const clipMs = newMs - (videoSrcOffsetMs || 0);
+      try { v.currentTime = Math.max(0, clipMs) / 1000; } catch { /* readyState gate not met */ }
+    }
+    onSeek?.(newMs);
   };
-  const back5 = () => onSeek?.(Math.max(0, (currentMs || 0) - 5000));
+  // Back-5s clamps to chapter.start when a chapter prop is present —
+  // symmetric with forward5 below. Without this in-MediaViewer floor,
+  // back-5s relied entirely on the parent's onSeek clamp; in phrase
+  // scope that round-trip occasionally let the seek land before
+  // scope.start, surfacing as "back-5s crossed into the previous
+  // slice" (user 2026-05-22). Belt-and-suspenders: clamp here too.
+  const back5 = () => {
+    const floor = chapter ? chapter.start : 0;
+    onSeek?.(Math.max(floor, (currentMs || 0) - 5000));
+  };
   // Forward 5s symmetric with back5. When totalMs is known clamp to it,
   // otherwise just step forward — the parent decides what to do with an
   // overshoot (typically clamp into chapter.end / track length).

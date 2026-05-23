@@ -38,6 +38,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Sparkline } from './Charts.jsx';
 import { Icon } from './primitives.jsx';
 import { MediaViewer } from './MediaViewer.jsx';
+import { useNativeWheel } from './hooks/useNativeWheel.js';
 
 export function ChapterContextStrip({
   chapter,                  // { at_ms, end_ms }
@@ -162,6 +163,7 @@ const PAD_BOTTOM = 16;
 // stay agnostic of the outer padding.
 function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, height }) {
   const wrapRef = useRef(null);
+  const plotRef = useRef(null);
   const [pxWidth, setPxWidth] = useState(800);
   useEffect(() => {
     if (!wrapRef.current) return undefined;
@@ -170,15 +172,38 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
     return () => ro.disconnect();
   }, []);
 
+  // ── Wheel-zoomable view window ──────────────────────────────────────
+  // The strip's visible time range. Initially the whole chapter; wheel
+  // zooms in/out, panning to keep the cursor's time stable. Clamps to
+  // chapter bounds at both edges. Reset to whole-chapter on chapter
+  // change (new context, fresh view).
+  //
+  // Closes the parity gap with Project / Device / Chapters tab, which
+  // get wheel zoom via FunscriptChart. PhrasesTab / PatternsTab /
+  // StanzasTab / CharactersTab use this strip instead of FunscriptChart
+  // (different click semantics — band overlays), so the zoom had to
+  // land here too.
+  const [view, setView] = useState(() => ({
+    start: chapter.at_ms,
+    end: chapter.end_ms,
+  }));
+  useEffect(() => {
+    setView({ start: chapter.at_ms, end: chapter.end_ms });
+  }, [chapter.at_ms, chapter.end_ms]);
+
   const span = Math.max(1, chapter.end_ms - chapter.at_ms);
+  const viewSpan = Math.max(1, view.end - view.start);
   const plotW = Math.max(1, pxWidth - PAD_LEFT - PAD_RIGHT);
-  const xFor = (ms) => ((ms - chapter.at_ms) / span) * plotW;
+  const xFor = (ms) => ((ms - view.start) / viewSpan) * plotW;
   // Click handler is on the inset plot div, so its e.clientX-rect.left
   // is already plot-relative — no PAD_LEFT subtraction needed here.
-  const msFromX = (xLocal) => chapter.at_ms + (xLocal / plotW) * span;
+  const msFromX = (xLocal) => view.start + (xLocal / plotW) * viewSpan;
 
-  // Slice + shift actions to the chapter window. Sparkline's start/end
-  // are in the same time scale as the actions, so we re-base to 0 here.
+  // Slice + shift actions to the chapter window. Sparkline takes the
+  // chapter-rebased actions and we pass it view-relative start/end so
+  // it draws only the visible window. Keeping the rebase keyed on
+  // chapter (not view) avoids re-filtering ~all-project-actions on
+  // every wheel tick.
   const chapterActions = useMemo(
     () => (actions || [])
       .filter((a) => a.at >= chapter.at_ms && a.at <= chapter.end_ms)
@@ -187,23 +212,58 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
   );
 
   // Time-axis ticks — pick the largest "nice" step that still leaves
-  // fewer than 10 ticks across the chapter so labels don't overlap.
-  // The list grows from 5s to 5m; chapters longer than ~50 min use the
-  // 5m step and just live with crowded labels at the end.
+  // fewer than 10 ticks across the visible window so labels don't
+  // overlap. Step grows from 5s to 5m; ticks recompute on zoom so a
+  // zoomed-in 12s window gets 5s ticks while the whole-chapter view
+  // uses 1m or 5m ticks.
   const ticks = useMemo(() => {
-    const niceSteps = [5000, 10000, 15000, 30000, 60000, 120000, 300000];
-    const step = niceSteps.find((s) => span / s < 10) ?? 300000;
-    const first = Math.ceil(chapter.at_ms / step) * step;
+    const niceSteps = [1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000];
+    const step = niceSteps.find((s) => viewSpan / s < 10) ?? 300000;
+    const first = Math.ceil(view.start / step) * step;
     const out = [];
-    for (let t = first; t <= chapter.end_ms; t += step) out.push(t);
+    for (let t = first; t <= view.end; t += step) out.push(t);
     return out;
-  }, [chapter.at_ms, chapter.end_ms, span]);
+  }, [view.start, view.end, viewSpan]);
 
   const handleBackgroundClick = (e) => {
     if (!onSeek) return;
     const rect = e.currentTarget.getBoundingClientRect();
     onSeek(msFromX(e.clientX - rect.left));
   };
+
+  // Wheel handler — zoom in/out anchored on the cursor's time so the
+  // point under the cursor stays under the cursor. preventDefault stops
+  // page scroll bleed-through. React's onWheel is passive-by-default
+  // and can't preventDefault, hence useNativeWheel.
+  const handleWheel = (e) => {
+    e.preventDefault();
+    if (!plotRef.current) return;
+    const rect = plotRef.current.getBoundingClientRect();
+    const xLocal = e.clientX - rect.left;
+    if (xLocal < 0 || xLocal > rect.width) return;
+    const cursorMs = view.start + (xLocal / rect.width) * viewSpan;
+    // Negative deltaY = scroll up = zoom IN (narrower window).
+    const zoomFactor = e.deltaY < 0 ? 0.82 : 1.22;
+    // Min visible window: 500ms (frame-level precision). Max: chapter.
+    const MIN_WIDTH_MS = 500;
+    let newWidth = viewSpan * zoomFactor;
+    newWidth = Math.max(MIN_WIDTH_MS, Math.min(span, newWidth));
+    // Keep cursor time fixed in screen x.
+    const ratio = (cursorMs - view.start) / viewSpan;
+    let newStart = cursorMs - ratio * newWidth;
+    let newEnd = newStart + newWidth;
+    // Clamp to chapter bounds.
+    if (newStart < chapter.at_ms) {
+      newStart = chapter.at_ms;
+      newEnd = newStart + newWidth;
+    }
+    if (newEnd > chapter.end_ms) {
+      newEnd = chapter.end_ms;
+      newStart = Math.max(chapter.at_ms, newEnd - newWidth);
+    }
+    setView({ start: newStart, end: newEnd });
+  };
+  useNativeWheel(plotRef, handleWheel);
 
   return (
     <div
@@ -232,8 +292,11 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
       </div>
 
       {/* Plot area — the inset rect that owns Sparkline + bands + ticks.
-          Click handler lives here so e.clientX is already plot-relative. */}
+          Click handler lives here so e.clientX is already plot-relative.
+          Wheel listener (via useNativeWheel) is on this same ref so
+          wheeling over the waveform zooms the view. */}
       <div
+        ref={plotRef}
         onClick={handleBackgroundClick}
         style={{
           position: 'absolute',
@@ -242,12 +305,16 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
           cursor: onSeek ? 'pointer' : 'default',
         }}
       >
-        {/* Layer 1 — velocity-colored chapter waveform (rebased to 0..span) */}
+        {/* Layer 1 — velocity-colored waveform. Actions are rebased to
+            chapter (memoized once per chapter) and the Sparkline is told
+            to draw only the visible view window, expressed in
+            chapter-relative time. Zooming in passes a smaller sub-range
+            to Sparkline; the curve stretches to fill the plot width. */}
         <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
           <Sparkline
             actions={chapterActions}
-            start={0}
-            end={span}
+            start={view.start - chapter.at_ms}
+            end={view.end - chapter.at_ms}
             colorMode="velocity"
             height="100%"
             filled
@@ -276,7 +343,12 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
         })}
 
         {/* Layer 3 — per-band outline button. Click target. Consumer
-            chooses border weight / color (incl. alpha suffix). */}
+            chooses border weight / color (incl. alpha suffix).
+            The click passes the clicked ms as a second arg so consumers
+            who want "click anywhere in the strip seeks to that point"
+            (PhrasesTab) can use it. Consumers that only care about
+            band selection (ChaptersTab) ignore the second arg, so the
+            change is backward-compatible. */}
         {bands.map((band) => {
           const left = xFor(band.at_ms);
           const right = xFor(band.end_ms);
@@ -284,7 +356,12 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
           return (
             <button
               key={band.id}
-              onClick={(e) => { e.stopPropagation(); onSelectBand?.(band.id); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const plotRect = e.currentTarget.parentElement.getBoundingClientRect();
+                const clickedMs = msFromX(e.clientX - plotRect.left);
+                onSelectBand?.(band.id, clickedMs);
+              }}
               title={band.title || ''}
               style={{
                 position: 'absolute',
@@ -336,10 +413,11 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
           );
         })}
 
-        {/* Layer 5 — playhead. Renders only if the clock is inside the chapter.
-            2px wide with a soft glow so it reads against the velocity-colored
-            waveform (a 1px line was getting lost in the colors). */}
-        {currentMs != null && currentMs >= chapter.at_ms && currentMs <= chapter.end_ms && (
+        {/* Layer 5 — playhead. Renders only if the clock is inside the
+            current view window (which is itself inside the chapter).
+            2px wide with a soft glow so it reads against the velocity-
+            colored waveform (1px got lost in the colors). */}
+        {currentMs != null && currentMs >= view.start && currentMs <= view.end && (
           <div style={{
             position: 'absolute',
             left: xFor(currentMs) - 1, top: 0, bottom: 0,
@@ -375,7 +453,7 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
                 fontFamily: 'var(--font-mono)', fontSize: 9,
                 color: 'var(--text-dim)', whiteSpace: 'nowrap',
               }}>
-                {fmtTickMs(t - chapter.at_ms)}
+                {fmtTickMs(t)}
               </span>
             </div>
           );
@@ -385,8 +463,13 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
   );
 }
 
-// X-axis tick formatter — chapter-relative times read as 0:00 / 0:30 / 1:00.
-// Keeps the labels compact and tied to "how far into this chapter am I."
+// X-axis tick formatter — absolute times (M:SS) so the strip's axis
+// reads the same units as the header / table / per-row chart editors.
+// Earlier this formatter subtracted chapter.at_ms to produce "0:00 ..
+// 11:00" chapter-relative labels, but the user flagged 2026-05-23 that
+// the mixed relative/absolute axes across the same view was disorienting
+// (header said 17:37, axis said 0:00 for the same point). Now everything
+// reads as absolute M:SS.
 function fmtTickMs(ms) {
   const total = Math.max(0, Math.round(ms / 1000));
   const m = Math.floor(total / 60);

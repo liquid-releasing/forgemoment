@@ -27,6 +27,7 @@ import {
   Play, Plus, Radio, RefreshCcw, RotateCcw, Save, ScanLine, Search, Settings, Settings2,
   Shapes, Share2,
   Scissors, SkipBack, SkipForward, Sliders, Square, Star, StepBack, StepForward,
+  Target,
   Trash, Trash2, Upload, UploadCloud, User, Video, Volume2, VolumeX, X, Zap,
   ZoomIn, ZoomOut,
 } from 'lucide-react';
@@ -56,6 +57,7 @@ const LUCIDE_MAP = {
   'share-2': Share2, scissors: Scissors, 'skip-back': SkipBack,
   'skip-forward': SkipForward, sliders: Sliders, square: Square, star: Star,
   'step-back': StepBack, 'step-forward': StepForward,
+  target: Target,
   trash: Trash, 'trash-2': Trash2, upload: Upload, 'upload-cloud': UploadCloud,
   user: User, video: Video,
   'volume-2': Volume2, 'volume-x': VolumeX, x: X, zap: Zap,

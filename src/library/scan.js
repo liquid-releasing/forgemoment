@@ -21,7 +21,13 @@ export async function scanRoot(root, fs) {
   /** @type {import('./types.js').Project[]} */
   const projects = [];
   const errors = [];
-  await walkDir(root.path, projects, errors, fs);
+  // The ancestorProjects map carries stems claimed by directories higher
+  // in the tree. When we descend and find a media file whose stem matches
+  // an ancestor's, the file is promoted to a companion of that ancestor
+  // rather than starting a new project. This handles the stim-output case
+  // (per-channel mp3s sitting in a subfolder of the source video) without
+  // a separate code path.
+  await walkDir(root.path, projects, errors, fs, new Map());
   return {
     root,
     projects,
@@ -31,15 +37,22 @@ export async function scanRoot(root, fs) {
 }
 
 /**
- * Recursive directory walk. For each directory: group media files by stem
- * into one Project per stem (video + same-stem audio = one project per the
- * companion rule), then recurse into subdirs.
+ * Recursive directory walk. For each directory: group media files by stem,
+ * either (a) promote to companions of an ancestor project with the same
+ * stem, or (b) build a new Project. Then recurse into subdirs, carrying
+ * down the merged set of ancestor projects.
  *
  * Skips `.<stem>.forge/` directories — those are sidecar storage, not
  * project storage. Skips any directory starting with a dot to avoid
  * surprises in user folders (`.git`, `.DS_Store` parents, etc.).
+ *
+ * @param {string} dirPath
+ * @param {import('./types.js').Project[]} projects
+ * @param {string[]} errors
+ * @param {import('./types.js').FsAdapter} fs
+ * @param {Map<string, import('./types.js').Project>} ancestorProjects
  */
-async function walkDir(dirPath, projects, errors, fs) {
+async function walkDir(dirPath, projects, errors, fs, ancestorProjects) {
   /** @type {import('./types.js').DirEntry[]} */
   let entries;
   try {
@@ -86,20 +99,116 @@ async function walkDir(dirPath, projects, errors, fs) {
     stemGroups.get(stem).push(media);
   }
 
-  // Build one Project per stem group in this directory.
-  for (const [stem, files] of stemGroups) {
+  // Decide for each stem group: promote to an ancestor's companions, or
+  // build a new Project. Track this dir's new projects so we can extend
+  // the ancestor map for the recursion below.
+  // Process video-bearing stem groups first so audio groups in the same
+  // directory can see the just-built video projects when checking for
+  // dot-prefix derivative matches (the Edger stim case:
+  // `liquidreleasing.stereostim.mp3` derives from `liquidreleasing.mp4`).
+  const orderedStemGroups = [...stemGroups.entries()].sort((a, b) => {
+    const aHasVideo = a[1].some((f) => f.kind === 'video');
+    const bHasVideo = b[1].some((f) => f.kind === 'video');
+    if (aHasVideo === bHasVideo) return 0;
+    return aHasVideo ? -1 : 1;
+  });
+
+  /** @type {import('./types.js').Project[]} */
+  const localProjects = [];
+  /** @type {Map<string, import('./types.js').Project>} */
+  const localProjectsByStem = new Map();
+  for (const [stem, files] of orderedStemGroups) {
+    // Look for a video project (ancestor OR local same-dir) whose stem
+    // either matches exactly OR is a dot-prefix of this stem. Only audio-
+    // only stem groups can be derivatives (a video in a subdir is its
+    // own project, not a derivative of an upper video).
+    const claimable = mergeAncestors(ancestorProjects, localProjectsByStem);
+    const match = findDerivativeMatch(stem, files, claimable);
+    if (match) {
+      for (const f of files) match.companions.push(f.path);
+      match.pills.audio = true;
+      continue;
+    }
     try {
       const project = await buildProject(stem, files, dirPath, fs);
       projects.push(project);
+      localProjects.push(project);
+      localProjectsByStem.set(stem, project);
     } catch (e) {
       errors.push(`buildProject ${stem} in ${dirPath}: ${e?.message ?? e}`);
     }
   }
 
-  // Recurse into subdirs.
+  // Build the ancestor map passed to children: parent ancestors PLUS this
+  // dir's new projects (stem-keyed). New per branch — sibling subdirs at
+  // the same depth see the same ancestors, not each other's projects.
+  const childAncestors = new Map(ancestorProjects);
+  for (const p of localProjects) childAncestors.set(p.stem, p);
+
   for (const subdir of subdirs) {
-    await walkDir(subdir, projects, errors, fs);
+    await walkDir(subdir, projects, errors, fs, childAncestors);
   }
+}
+
+/**
+ * Find a video project this audio-only stem group should attach to as
+ * companions. Returns null if there's no good match — caller then builds
+ * a standalone project. The rule is intentionally narrow to avoid
+ * collapsing user-organized duplicates (see scan.test.js for the
+ * Prisoner vs. stim cases).
+ *
+ * Match rules (any one suffices, ALL within a video-only ancestor):
+ *   1. Exact stem match — `source.mp4` claims `source.mp3` in a subdir.
+ *   2. Dot-prefix match — `source.mp4` claims `source.alpha.mp3`,
+ *      `source.prostate.stereostim.mp3`, etc. The trailing dot is
+ *      required so `liquidreleasing.mp4` does NOT claim
+ *      `liquidreleasingexit.stereostim.mp3` (the prefix would have to
+ *      end at a `.` boundary).
+ *
+ * When multiple ancestors could match (e.g. `liquid.mp4` and
+ * `liquid.bar.mp4` both ancestors of `liquid.bar.baz.mp3`), the LONGEST
+ * matching prefix wins — the most specific ancestor claims.
+ *
+ * @param {string} stem                    the stem of the candidate group
+ * @param {import('./types.js').MediaFile[]} files
+ * @param {Map<string, import('./types.js').Project>} candidates
+ */
+function findDerivativeMatch(stem, files, candidates) {
+  // Only audio-only groups are eligible — videos in subdirs are always
+  // their own projects (covers `/lib/archive/Prisoner.mp4` etc.).
+  if (!files.every((f) => f.kind === 'audio')) return null;
+
+  // Exact match takes precedence.
+  const exact = candidates.get(stem);
+  if (exact && exact.kind === 'video') return exact;
+
+  // Longest dot-prefix wins.
+  let best = null;
+  let bestLen = 0;
+  for (const [candidateStem, project] of candidates) {
+    if (project.kind !== 'video') continue;
+    if (
+      stem.length > candidateStem.length + 1
+      && stem.startsWith(`${candidateStem}.`)
+      && candidateStem.length > bestLen
+    ) {
+      best = project;
+      bestLen = candidateStem.length;
+    }
+  }
+  return best;
+}
+
+/**
+ * Combine the ancestor projects map with this directory's just-built
+ * locals into one lookup. Locals shadow ancestors with the same stem
+ * (most-specific scope wins for derivative claiming).
+ */
+function mergeAncestors(ancestorProjects, localProjectsByStem) {
+  if (localProjectsByStem.size === 0) return ancestorProjects;
+  const out = new Map(ancestorProjects);
+  for (const [stem, project] of localProjectsByStem) out.set(stem, project);
+  return out;
 }
 
 /**

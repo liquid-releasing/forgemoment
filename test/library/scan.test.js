@@ -282,6 +282,166 @@ describe('scanRoot — metadata + cached thumb', () => {
   });
 });
 
+describe('scanRoot — ancestor-stem matching (companion promotion)', () => {
+  it('promotes a same-stem audio in a subdir to a companion of the ancestor video', async () => {
+    // The stim-output case: /lib/Euphoria2.mp4 + /lib/stim/Euphoria2.mp3.
+    // The subdir mp3 must NOT become its own project; it attaches to the
+    // ancestor.
+    const fs = new InMemoryFs({
+      '/lib/Euphoria2.mp4': '',
+      '/lib/stim/Euphoria2.mp3': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(1);
+    const p = result.projects[0];
+    expect(p.mediaPath).toBe('/lib/Euphoria2.mp4');
+    expect(p.companions).toContain('/lib/stim/Euphoria2.mp3');
+    // Audio pill flips on because we now have an audio companion.
+    expect(p.pills.audio).toBe(true);
+  });
+
+  it('promotes multiple deeper companions to one ancestor', async () => {
+    const fs = new InMemoryFs({
+      '/lib/Source.mp4': '',
+      '/lib/stim/Source.mp3': '',
+      '/lib/renders/Source.wav': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(1);
+    expect(result.projects[0].companions.sort()).toEqual([
+      '/lib/renders/Source.wav',
+      '/lib/stim/Source.mp3',
+    ]);
+  });
+
+  it('does not promote across sibling subdirs (only ancestor stems claim)', async () => {
+    // /lib/a/Track.mp4 and /lib/b/Track.mp4 are siblings — they are two
+    // separate projects, NOT one with the other as companion.
+    const fs = new InMemoryFs({
+      '/lib/a/Track.mp4': '',
+      '/lib/b/Track.mp4': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(2);
+    for (const p of result.projects) {
+      expect(p.companions).toEqual([]);
+    }
+  });
+
+  it('a stem at the root claims same-stem media at any depth below', async () => {
+    const fs = new InMemoryFs({
+      '/lib/movie.mp4': '',
+      '/lib/sub/movie.mp3': '',
+      '/lib/sub/deep/movie.wav': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(1);
+    expect(result.projects[0].companions.sort()).toEqual([
+      '/lib/sub/deep/movie.wav',
+      '/lib/sub/movie.mp3',
+    ]);
+  });
+
+  it('a stem first seen in a subdir does not retro-claim sibling subdirs', async () => {
+    // /lib/a/foo.mp4 is its own project. /lib/b/foo.mp4 is also its own
+    // project (sibling — ancestor map at /lib was empty when /lib/b
+    // was entered). Neither is a companion of the other.
+    const fs = new InMemoryFs({
+      '/lib/a/foo.mp4': '',
+      '/lib/b/foo.mp4': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(2);
+  });
+
+  it('promotes Edger-style stim audio (stem + dot + suffix) in a subdir', async () => {
+    // The real user case: stim outputs are named `<source>.stereostim.mp3`,
+    // `<source>.prostate.stereostim.mp3` etc. — stems differ from the
+    // source video stem by a dot-suffix.
+    const fs = new InMemoryFs({
+      '/lib/liquidreleasing/liquidreleasing.mp4': '',
+      '/lib/liquidreleasing/estim/liquidreleasing.stereostim.mp3': '',
+      '/lib/liquidreleasing/estim/liquidreleasing.prostate.stereostim.mp3': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(1);
+    expect(result.projects[0].mediaPath).toBe('/lib/liquidreleasing/liquidreleasing.mp4');
+    expect(result.projects[0].companions.sort()).toEqual([
+      '/lib/liquidreleasing/estim/liquidreleasing.prostate.stereostim.mp3',
+      '/lib/liquidreleasing/estim/liquidreleasing.stereostim.mp3',
+    ]);
+    expect(result.projects[0].pills.audio).toBe(true);
+  });
+
+  it('dot-prefix derivative in the SAME directory promotes too', async () => {
+    const fs = new InMemoryFs({
+      '/lib/track.mp4': '',
+      '/lib/track.alpha.mp3': '',
+      '/lib/track.beta.mp3': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(1);
+    expect(result.projects[0].kind).toBe('video');
+    expect(result.projects[0].companions.sort()).toEqual([
+      '/lib/track.alpha.mp3',
+      '/lib/track.beta.mp3',
+    ]);
+  });
+
+  it('prefix match requires a dot boundary (no liquidreleasing claiming liquidreleasingexit derivatives)', async () => {
+    const fs = new InMemoryFs({
+      '/lib/liquidreleasing.mp4': '',
+      '/lib/estim/liquidreleasingexit.stereostim.mp3': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    // Two separate projects — the audio's stem isn't a dot-prefix of the video's.
+    expect(result.projects.length).toBe(2);
+    expect(result.projects.find((p) => p.kind === 'video').companions).toEqual([]);
+  });
+
+  it('longest dot-prefix wins when multiple ancestors could match', async () => {
+    const fs = new InMemoryFs({
+      '/lib/liquid.mp4': '',
+      '/lib/liquid.bar.mp4': '',
+      '/lib/sub/liquid.bar.baz.mp3': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(2);
+    const bar = result.projects.find((p) => p.stem === 'liquid.bar');
+    expect(bar.companions).toEqual(['/lib/sub/liquid.bar.baz.mp3']);
+    const liquid = result.projects.find((p) => p.stem === 'liquid');
+    expect(liquid.companions).toEqual([]);
+  });
+
+  it('does NOT promote same-kind same-stem video in subdir (user-organized duplicate)', async () => {
+    // Two Prisoner.mp4 in different folders — both are valid separate
+    // projects; the deeper video is NOT a derivative of the upper.
+    const fs = new InMemoryFs({
+      '/lib/Prisoner.mp4': '',
+      '/lib/archive/Prisoner.mp4': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(2);
+  });
+
+  it('adjacent companion (same dir) still works alongside ancestor promotion', async () => {
+    // Make sure the existing same-dir companion rule and the new
+    // ancestor-stem rule cooperate cleanly.
+    const fs = new InMemoryFs({
+      '/lib/track.mp4': '',
+      '/lib/track.wav': '',          // adjacent companion
+      '/lib/sub/track.mp3': '',      // promoted from subdir
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(1);
+    expect(result.projects[0].mediaPath).toBe('/lib/track.mp4');
+    expect(result.projects[0].companions.sort()).toEqual([
+      '/lib/sub/track.mp3',
+      '/lib/track.wav',
+    ]);
+  });
+});
+
 describe('scanRoot — output stability', () => {
   it('returns scannedAt as a number (ms epoch)', async () => {
     const fs = new InMemoryFs({}, ['/lib']);

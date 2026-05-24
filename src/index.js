@@ -63,6 +63,24 @@ export { TransformPanel } from './TransformPanel.jsx';
 // library's top-level src/ stays a list of components.
 export { useNativeWheel } from './hooks/useNativeWheel.js';
 
+// Library — the shared "what's in my collection" data layer. v1 ships
+// the scan + config primitives; LibraryView component lands in Phase B.
+// Forgemoment stays platform-free; consumers pass an FsAdapter to scan
+// and config helpers (see src/library/types.js).
+export {
+  VIDEO_EXTS,
+  AUDIO_EXTS,
+  AUDIO_FIDELITY,
+  SIDECAR_NAMES,
+  scanRoot,
+  defaultConfig,
+  loadConfig,
+  saveConfig,
+  addRoot,
+  removeRoot,
+  renameRoot,
+} from './library/index.js';
+
 // Charts — visualisation primitives. Charts.jsx is fully carved out as
 // of v0.0.2 (the iter 08 source has no remaining unported components).
 export {

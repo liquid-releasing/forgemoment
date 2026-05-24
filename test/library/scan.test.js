@@ -133,7 +133,95 @@ describe('scanRoot — pills', () => {
       '/lib/Euphoria2.funscript': '{}',
     });
     const result = await scanRoot(ROOT, fs);
-    expect(result.projects[0].pills.funscript).toBe(true);
+    const p = result.projects[0];
+    expect(p.pills.funscript).toBe(true);
+    expect(p.funscriptName).toBe('Euphoria2.funscript');
+  });
+
+  it('pairs funscript with media when stem differs only by underscore-qualifier suffix', async () => {
+    // Real-world IPZZ-125 case: funscript was authored against one cut,
+    // user has another cut named with an extra `_iris3` qualifier in
+    // the same folder. Strict stem matching missed the pairing.
+    const fs = new InMemoryFs({
+      '/lib/IPZZ-125.molester.omfg_iris3.mp4': '',
+      '/lib/IPZZ-125.molester.omfg.funscript': '{}',
+    });
+    const result = await scanRoot(ROOT, fs);
+    const p = result.projects[0];
+    expect(p.stem).toBe('IPZZ-125.molester.omfg_iris3');
+    expect(p.pills.funscript).toBe(true);
+    expect(p.funscriptName).toBe('IPZZ-125.molester.omfg.funscript');
+  });
+
+  it('pairs funscript by dot-qualifier suffix too (Movie.funscript ↔ Movie.1080p.mp4)', async () => {
+    const fs = new InMemoryFs({
+      '/lib/Movie.1080p.mp4': '',
+      '/lib/Movie.funscript': '{}',
+    });
+    const result = await scanRoot(ROOT, fs);
+    const p = result.projects[0];
+    expect(p.pills.funscript).toBe(true);
+    expect(p.funscriptName).toBe('Movie.funscript');
+  });
+
+  it('requires a boundary character — Movie.funscript does NOT claim MovieExtended.mp4', async () => {
+    const fs = new InMemoryFs({
+      '/lib/MovieExtended.mp4': '',
+      '/lib/Movie.funscript': '{}',
+    });
+    const result = await scanRoot(ROOT, fs);
+    const p = result.projects[0];
+    expect(p.pills.funscript).toBe(false);
+    expect(p.funscriptName).toBe(null);
+  });
+
+  it('picks the longest prefix match when multiple funscripts could claim a media file', async () => {
+    const fs = new InMemoryFs({
+      '/lib/source.alpha.beta_v2.mp4': '',
+      '/lib/source.funscript': '{}',           // matches at "source"
+      '/lib/source.alpha.funscript': '{}',     // matches at "source.alpha" — more specific
+      '/lib/source.alpha.beta.funscript': '{}',// matches at "source.alpha.beta" — most specific
+    });
+    const result = await scanRoot(ROOT, fs);
+    const p = result.projects[0];
+    expect(p.pills.funscript).toBe(true);
+    expect(p.funscriptName).toBe('source.alpha.beta.funscript');
+  });
+
+  it('exact-stem match wins over prefix-with-boundary when both exist', async () => {
+    const fs = new InMemoryFs({
+      '/lib/big-name.mp4': '',
+      '/lib/big-name.funscript': '{}',     // exact
+      '/lib/big.funscript': '{}',          // prefix-with-boundary
+    });
+    const result = await scanRoot(ROOT, fs);
+    const p = result.projects[0];
+    expect(p.funscriptName).toBe('big-name.funscript');
+  });
+
+  it('two videos in one folder — exact match attaches to one, longer media gets none', async () => {
+    // Sibling case to the IPZZ-125 setup: a plain `ipzz-125.mp4` AND
+    // the heavier `IPZZ-125.molester.omfg_iris3.mp4` live in the same
+    // folder. The funscript stem is shorter than the heavier video's
+    // stem (so it does match by prefix), and is unrelated to the
+    // plain video's stem.
+    const fs = new InMemoryFs({
+      '/lib/ipzz-125.mp4': '',
+      '/lib/IPZZ-125.molester.omfg_iris3.mp4': '',
+      '/lib/IPZZ-125.molester.omfg.funscript': '{}',
+    });
+    const result = await scanRoot(ROOT, fs);
+    const byStem = Object.fromEntries(
+      result.projects.map((p) => [p.stem, p]),
+    );
+    // Plain video can't claim the funscript — its stem doesn't contain
+    // the funscript stem.
+    expect(byStem['ipzz-125'].pills.funscript).toBe(false);
+    expect(byStem['ipzz-125'].funscriptName).toBe(null);
+    // Heavy video claims it via prefix-with-boundary.
+    expect(byStem['IPZZ-125.molester.omfg_iris3'].pills.funscript).toBe(true);
+    expect(byStem['IPZZ-125.molester.omfg_iris3'].funscriptName)
+      .toBe('IPZZ-125.molester.omfg.funscript');
   });
 
   it('audio pill = true when peaks sidecar exists in forge dir', async () => {

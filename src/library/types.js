@@ -107,6 +107,11 @@ export const SIDECAR_NAMES = {
  * @property {string}      stem          filename without extension
  * @property {string}      dirPath       absolute path of the directory holding the media
  * @property {string}      forgeDir      absolute path of `.<stem>.forge/` (may not exist)
+ * @property {string|null} funscriptName basename of the paired .funscript file in the
+ *                                       same dir, when one was found. May differ from
+ *                                       `<stem>.funscript` when matched by prefix-with-
+ *                                       boundary (e.g. `IPZZ-125.omfg.funscript` paired
+ *                                       with `IPZZ-125.omfg_iris3.mp4`).
  * @property {number}      sizeBytes
  * @property {string}      mtime         ISO-8601 last-modified time
  * @property {number|null} durationMs    null until thumb/metadata pass runs

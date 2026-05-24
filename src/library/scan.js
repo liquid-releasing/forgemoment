@@ -69,6 +69,11 @@ async function walkDir(dirPath, projects, errors, fs, ancestorProjects) {
   const stemGroups = new Map();
   /** @type {string[]} */
   const subdirs = [];
+  // Funscript candidates in this dir — used downstream to pair funscripts
+  // with media via prefix-with-boundary matching (handles "IPZZ-125.omfg
+  // .funscript pairs with IPZZ-125.omfg_iris3.mp4" style mismatches).
+  /** @type {{stem: string, name: string}[]} */
+  const funscriptCandidates = [];
 
   for (const entry of entries) {
     if (entry.isDirectory) {
@@ -82,6 +87,10 @@ async function walkDir(dirPath, projects, errors, fs, ancestorProjects) {
     if (!entry.isFile) continue;
 
     const ext = fs.extname(entry.name).toLowerCase();
+    if (ext === '.funscript') {
+      funscriptCandidates.push({ stem: fs.stem(entry.name), name: entry.name });
+      continue;
+    }
     const isVideo = VIDEO_EXTS.has(ext);
     const isAudio = AUDIO_EXTS.has(ext);
     if (!isVideo && !isAudio) continue;
@@ -122,7 +131,17 @@ async function walkDir(dirPath, projects, errors, fs, ancestorProjects) {
     // either matches exactly OR is a dot-prefix of this stem. Only audio-
     // only stem groups can be derivatives (a video in a subdir is its
     // own project, not a derivative of an upper video).
-    const claimable = mergeAncestors(ancestorProjects, localProjectsByStem);
+    //
+    // Inlined the ancestor+local merge so we never depend on top-level
+    // function hoisting across this file — a Vite Fast-Refresh edge
+    // case was producing a ReferenceError in the dev server.
+    let claimable;
+    if (localProjectsByStem.size === 0) {
+      claimable = ancestorProjects;
+    } else {
+      claimable = new Map(ancestorProjects);
+      for (const [s, p] of localProjectsByStem) claimable.set(s, p);
+    }
     const match = findDerivativeMatch(stem, files, claimable);
     if (match) {
       for (const f of files) match.companions.push(f.path);
@@ -130,7 +149,7 @@ async function walkDir(dirPath, projects, errors, fs, ancestorProjects) {
       continue;
     }
     try {
-      const project = await buildProject(stem, files, dirPath, fs);
+      const project = await buildProject(stem, files, dirPath, fs, funscriptCandidates);
       projects.push(project);
       localProjects.push(project);
       localProjectsByStem.set(stem, project);
@@ -200,23 +219,11 @@ function findDerivativeMatch(stem, files, candidates) {
 }
 
 /**
- * Combine the ancestor projects map with this directory's just-built
- * locals into one lookup. Locals shadow ancestors with the same stem
- * (most-specific scope wins for derivative claiming).
- */
-function mergeAncestors(ancestorProjects, localProjectsByStem) {
-  if (localProjectsByStem.size === 0) return ancestorProjects;
-  const out = new Map(ancestorProjects);
-  for (const [stem, project] of localProjectsByStem) out.set(stem, project);
-  return out;
-}
-
-/**
  * Build a Project from a stem group. Primary selection: prefer video; if
  * audio-only, pick highest-fidelity audio (.wav > .flac > .m4a > .mp3 > .ogg).
  * All non-primary files become companions.
  */
-async function buildProject(stem, files, dirPath, fs) {
+async function buildProject(stem, files, dirPath, fs, funscriptCandidates = []) {
   const primary = pickPrimary(files);
   const companions = files
     .filter((f) => f.path !== primary.path)
@@ -229,11 +236,19 @@ async function buildProject(stem, files, dirPath, fs) {
   const forgeDir = fs.join(dirPath, `.${stem}.forge`);
   const forgeDirExists = await fs.exists(forgeDir);
 
+  // Resolve the funscript for this project up front so the result is
+  // available to both the pill check AND the project record (callers
+  // need the actual matched filename, not just a boolean — see the
+  // IPZZ-125.omfg.funscript / IPZZ-125.omfg_iris3.mp4 case).
+  const funscriptMatch = findFunscriptMatch(stem, funscriptCandidates);
+  const funscriptName = funscriptMatch?.name ?? null;
+
   // Pills — pure existence checks. `forged` requires reading `.feel.yml`
   // contents in the future to validate non-empty assignments; v1 ships
   // the simple version (file exists) and refines once .feel.yml lands.
   const pills = await detectPills({
     stem, dirPath, forgeDir, forgeDirExists, primary, companions, files, fs,
+    funscriptName,
   });
 
   // Metadata — cheap reads only (sidecar JSON parsing). Each field is
@@ -270,6 +285,7 @@ async function buildProject(stem, files, dirPath, fs) {
     stem,
     dirPath,
     forgeDir,
+    funscriptName,
     sizeBytes: stat.size,
     mtime: new Date(stat.mtimeMs).toISOString(),
     durationMs: metadata.durationMs ?? null,
@@ -279,6 +295,47 @@ async function buildProject(stem, files, dirPath, fs) {
     status,
     thumbPath,
   };
+}
+
+/**
+ * Pair a funscript file with a project's media stem.
+ *
+ *   1. Exact stem match (case-insensitive) wins outright.
+ *   2. Otherwise, the longest funscript-stem that the project stem starts
+ *      with — followed by a boundary char (`.`, `_`, `-`) — wins.
+ *
+ * The boundary requirement keeps `Movie.funscript` from claiming
+ * `MovieExtended.mp4`, while still pairing `IPZZ-125.omfg.funscript` with
+ * `IPZZ-125.omfg_iris3.mp4` (the case the strict scan was missing).
+ *
+ * @param {string} projectStem
+ * @param {{stem: string, name: string}[]} candidates
+ * @returns {{stem: string, name: string} | null}
+ */
+function findFunscriptMatch(projectStem, candidates) {
+  if (!candidates || candidates.length === 0) return null;
+  const projLower = projectStem.toLowerCase();
+
+  // Exact case-insensitive match takes precedence.
+  for (const c of candidates) {
+    if (c.stem.toLowerCase() === projLower) return c;
+  }
+
+  // Longest prefix-with-boundary match.
+  let best = null;
+  let bestLen = 0;
+  for (const c of candidates) {
+    const candLower = c.stem.toLowerCase();
+    if (candLower.length >= projLower.length) continue;
+    if (!projLower.startsWith(candLower)) continue;
+    const boundary = projLower.charAt(candLower.length);
+    if (boundary !== '.' && boundary !== '_' && boundary !== '-') continue;
+    if (candLower.length > bestLen) {
+      best = c;
+      bestLen = candLower.length;
+    }
+  }
+  return best;
 }
 
 /**
@@ -303,6 +360,7 @@ function pickPrimary(files) {
  */
 async function detectPills({
   stem, dirPath, forgeDir, forgeDirExists, primary, companions, files, fs,
+  funscriptName,
 }) {
   // video pill = the project has at least one video file
   const hasVideo = files.some((f) => f.kind === 'video');
@@ -320,10 +378,10 @@ async function detectPills({
       || (await fs.exists(spectro));
   }
 
-  // funscript pill — `<dirPath>/<stem>.funscript` next to the media,
-  // NOT inside the forge dir.
-  const funscriptPath = fs.join(dirPath, `${stem}.funscript`);
-  const hasFunscript = await fs.exists(funscriptPath);
+  // funscript pill — driven by findFunscriptMatch upstream (see
+  // buildProject). Allows the relaxed prefix-with-boundary pairing that
+  // the strict `<stem>.funscript` existence check would miss.
+  const hasFunscript = !!funscriptName;
 
   // forged pill — `.feel.yml` exists in the forge dir. v1 is simple
   // file-exists; once .feel.yml has a concrete shape, refine to require

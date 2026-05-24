@@ -15,7 +15,9 @@
 // error message + a Retry button. Never strand the page on a half-
 // loaded section with no way to recover.
 
+import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../primitives.jsx';
+import { VELOCITY_COLOR_STOPS, interpolateColorStops } from '../Charts.jsx';
 
 // ─── Section chrome ───────────────────────────────────────────────
 // Every panel shares this outer shape: eyebrow + title + body. Keeps
@@ -215,19 +217,181 @@ function ChapterStripBody({ chapters, focusedIdx, onFocus, durationMs }) {
 export function ScriptOverviewRow({
   status = 'loading', source, durationMs, error, onRetry,
 }) {
+  const eyebrow = source?.kind === 'audio' ? 'Audio overview'
+                : source?.kind === 'motion' ? 'Motion overview'
+                : 'Funscript heatmap';
   return (
     <PanelShell
-      eyebrow="Funscript heatmap"
-      right={source?.kind && (
-        <SourceBadge kind={source.kind} />
-      )}
+      eyebrow={eyebrow}
+      right={source?.kind && <SourceBadge kind={source.kind} />}
     >
       {status === 'error'   ? <ErrorCard height={28} message={error} onRetry={onRetry} /> :
        status === 'empty'   ? <EmptyCard height={28} message="No script, audio, or motion data yet." icon="activity" /> :
        status === 'loading' ? <Skeleton height={28} label="Reading script signal…" /> :
-                              <Skeleton height={28} label={`${source?.kind ?? 'data'} renderer pending`} />}
+       source                ? <ScriptOverviewCanvas source={source} durationMs={durationMs} height={28} /> :
+                              <EmptyCard height={28} message="Source unavailable." icon="activity" />}
     </PanelShell>
   );
+}
+
+// ScriptOverviewCanvas — the data-source-agnostic colored row painter.
+//
+// Funscript mode: per-pixel column color comes from the MAX |Δpos/Δt|
+// among action pairs that overlap the column's time range. Max (not
+// mean) so a single hot spike in the column reads bright — the row's
+// job is to flag intensity, not average it away. Velocity is normalized
+// to FUNSCRIPT_VELOCITY_REF (1.5 pos/ms ≈ 1500 pos/s) so the colormap
+// is comparable across scripts; anything above that pegs at full red.
+//
+// Audio mode: per-pixel column = MAX peaks value in the overlapping
+// bins, mapped through the same VELOCITY_COLOR_STOPS gradient. Using
+// the same gradient (rather than a separate audio-specific one) gives
+// readers a single visual vocabulary: blue = quiet/slow, red = loud/fast.
+//
+// Motion mode: same shape as audio, against a `motion` array. Deferred
+// until video-motion analysis lands.
+function ScriptOverviewCanvas({ source, durationMs, height = 28 }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [width, setWidth] = useState(0);
+
+  // Resize observer — react to container width changes. Mirrors the
+  // pattern used in Charts.jsx so analysis canvases behave the same
+  // as the rest of forgemoment's chart family.
+  useEffect(() => {
+    if (!wrapRef.current) return undefined;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !width) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.floor(width);
+    const h = height;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    if (source?.kind === 'funscript') {
+      paintFunscriptHeatmap(ctx, w, h, source, durationMs);
+    } else if (source?.kind === 'audio') {
+      paintAudioHeatmap(ctx, w, h, source, durationMs);
+    } else if (source?.kind === 'motion') {
+      paintAudioHeatmap(ctx, w, h, { ...source, peaks: source.motion, hopMs: source.hopMs }, durationMs);
+    } else {
+      paintEmptyTrack(ctx, w, h);
+    }
+  }, [width, height, source, durationMs]);
+
+  return (
+    <div ref={wrapRef} style={{
+      width: '100%', borderRadius: 8, overflow: 'hidden',
+      background: 'var(--bg)', border: '1px solid var(--border)',
+    }}>
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
+// Velocity normalization reference is computed PER SCRIPT, not fixed.
+// A fixed cap (1.5 pos/ms tried first) made calm scripts wash out to
+// blue/green even at their peaks. The row's job is "where are this
+// script's hot spots?" — qualitative within the script, not absolute
+// cross-script. Cross-script comparison happens in the KPI strip
+// (avg speed numbers).
+//
+// We use the 95th-percentile velocity as the reference so a single
+// outlier spike doesn't compress the rest of the colormap; the top
+// 5% of segments peg at full red, which reads as "the hot spots."
+function paintFunscriptHeatmap(ctx, w, h, source, fallbackDurationMs) {
+  const actions = source.actions;
+  if (!actions || actions.length < 2) {
+    paintEmptyTrack(ctx, w, h);
+    return;
+  }
+  const lastAt = actions[actions.length - 1].at;
+  const total = Math.max(1, source.durationMs ?? fallbackDurationMs ?? lastAt);
+
+  // Pass 1 — compute every action-pair velocity once.
+  const n = actions.length;
+  const vels = new Float32Array(n - 1);
+  for (let i = 1; i < n; i++) {
+    const dt = Math.max(1, actions[i].at - actions[i - 1].at);
+    vels[i - 1] = Math.abs(actions[i].pos - actions[i - 1].pos) / dt;
+  }
+
+  // Reference velocity = 95th percentile. Min floor of 0.05 protects
+  // against degenerate flat scripts where every segment is the same
+  // speed — colormap would otherwise saturate everything at red.
+  const sorted = Array.from(vels).sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
+  const ref = Math.max(0.05, p95);
+
+  // Pass 2 — max-pool normalized velocity into pixel columns.
+  const colByPx = new Float32Array(w);
+  for (let i = 1; i < n; i++) {
+    const a = actions[i - 1];
+    const b = actions[i];
+    const v = Math.min(1, vels[i - 1] / ref);
+    const x0 = Math.max(0, Math.min(w - 1, Math.floor((a.at / total) * w)));
+    const x1 = Math.max(0, Math.min(w - 1, Math.floor((b.at / total) * w)));
+    for (let x = x0; x <= x1; x++) {
+      if (v > colByPx[x]) colByPx[x] = v;
+    }
+  }
+
+  paintColumns(ctx, w, h, colByPx);
+}
+
+function paintAudioHeatmap(ctx, w, h, source, fallbackDurationMs) {
+  const peaks = source.peaks;
+  const hopMs = source.hopMs;
+  if (!peaks || peaks.length === 0 || !hopMs) {
+    paintEmptyTrack(ctx, w, h);
+    return;
+  }
+  const total = Math.max(1, peaks.length * hopMs);
+  const _ = fallbackDurationMs; // unused — audio sidecar self-describes its duration
+  const colByPx = new Float32Array(w);
+
+  // Max-pool peaks into pixel columns. Same "max" semantics as the
+  // funscript path so the rows read consistently.
+  const samplesPerPx = peaks.length / w;
+  for (let x = 0; x < w; x++) {
+    const start = Math.floor(x * samplesPerPx);
+    const end = Math.max(start + 1, Math.floor((x + 1) * samplesPerPx));
+    let m = 0;
+    for (let i = start; i < end && i < peaks.length; i++) {
+      const v = Math.min(1, Math.max(0, peaks[i]));
+      if (v > m) m = v;
+    }
+    colByPx[x] = m;
+  }
+
+  paintColumns(ctx, w, h, colByPx);
+}
+
+function paintColumns(ctx, w, h, colByPx) {
+  // 1px-wide columns. With a 28px-tall row this paints fast even at
+  // 4K (≈4000 fillRects), well below 1ms in practice.
+  for (let x = 0; x < w; x++) {
+    const t = colByPx[x];
+    if (t <= 0) continue;
+    ctx.fillStyle = interpolateColorStops(VELOCITY_COLOR_STOPS, t);
+    ctx.fillRect(x, 0, 1, h);
+  }
+}
+
+function paintEmptyTrack(ctx, w, h) {
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+  ctx.fillRect(0, 0, w, h);
 }
 
 // ─── Panel: pitch line ────────────────────────────────────────────

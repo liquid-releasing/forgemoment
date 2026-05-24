@@ -97,7 +97,9 @@ export {
   ScopePlayer,
   ScriptChart,
   Sparkline,
+  VELOCITY_COLOR_STOPS,
   bpmTier,
+  interpolateColorStops,
   tagColor,
   tagLabel,
 } from './Charts.jsx';

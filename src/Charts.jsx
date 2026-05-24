@@ -1145,6 +1145,21 @@ function _lerpHex(c0, c1, t) {
   return `#${[r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
 }
 
+// Public alias for the colormap helpers — exported so the Analysis
+// surface (and any other consumer) can paint against the same canonical
+// stops without copy/pasting the gradient. Keep `_interpolateStops`
+// internal name for back-compat with existing call sites in this file.
+export const VELOCITY_COLOR_STOPS = [
+  [0.0,  '#1a2fff'],
+  [0.25, '#00bfff'],
+  [0.5,  '#00e000'],
+  [0.75, '#ffdd00'],
+  [1.0,  '#ff1a1a'],
+];
+export function interpolateColorStops(stops, t) {
+  return _interpolateStops(stops, t);
+}
+
 function _interpolateStops(stops, t) {
   const u = Math.max(0, Math.min(1, t));
   if (u <= stops[0][0]) return stops[0][1];

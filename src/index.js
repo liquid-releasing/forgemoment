@@ -101,3 +101,18 @@ export {
   tagColor,
   tagLabel,
 } from './Charts.jsx';
+
+// Analysis — read-only overview surface primitives. Each panel takes
+// data-source-agnostic props + a status flag so the consuming app can
+// progressively reveal as pipeline stages land. Composed in FF's
+// AnalysisTab; ForgeGen + Beatflo are next-up consumers.
+export {
+  ANALYSIS_CATEGORIES,
+  ChapterStripPanel,
+  ScriptOverviewRow,
+  PitchLine,
+  BeatStrengthBars,
+  EnergyHeatRibbon,
+  KpiStrip,
+  CategoryPanel,
+} from './analysis/AnalysisPanels.jsx';

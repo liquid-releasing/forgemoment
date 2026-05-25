@@ -19,6 +19,32 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../primitives.jsx';
 import { VELOCITY_COLOR_STOPS, interpolateColorStops } from '../Charts.jsx';
 
+// Legacy → new texture-label map for chapters written by pre-2026-05-24
+// builds (music/ambient/mixed → driving/calm/varied). Mirrors
+// videoflow.chapters._LEGACY_CONTENT_TYPE_MAP — the Python writer
+// migrates on its next analyze pass, but the UI maps on read so old
+// sidecars still display the new vocabulary without a re-analyze.
+const LEGACY_CONTENT_TYPE_MAP = {
+  music: 'driving',
+  ambient: 'calm',
+  mixed: 'varied',
+};
+
+// Format a chapter's content+voice into a compound label like
+// "TALK · DRIVING" or "CALM" (when no voice detected). Empty string
+// when the chapter has neither — caller renders just the chapter
+// number in that case.
+function formatChapterCategory(chapter) {
+  if (!chapter) return '';
+  const rawTexture = chapter.contentType ?? chapter.content_type ?? '';
+  const texture = LEGACY_CONTENT_TYPE_MAP[rawTexture] ?? rawTexture;
+  const voice = chapter.voiceLabel ?? chapter.voice_label ?? '';
+  if (voice && texture) return `${voice} · ${texture}`.toUpperCase();
+  if (voice) return voice.toUpperCase();
+  if (texture) return texture.toUpperCase();
+  return '';
+}
+
 // ─── Section chrome ───────────────────────────────────────────────
 // Every panel shares this outer shape: eyebrow + title + body. Keeps
 // the visual rhythm consistent across rows.
@@ -187,7 +213,10 @@ function ChapterStripBody({ chapters, focusedIdx, onFocus, durationMs }) {
           >
             <div style={{ fontSize: 9.5, fontWeight: 700, opacity: 0.9, letterSpacing: '0.05em',
                           textTransform: 'uppercase', textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}>
-              {String(i + 1).padStart(2, '0')}{c.contentType ? ` · ${c.contentType}` : ''}
+              {String(i + 1).padStart(2, '0')}{(() => {
+                const cat = formatChapterCategory(c);
+                return cat ? ` · ${cat}` : '';
+              })()}
             </div>
             <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2,
                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',

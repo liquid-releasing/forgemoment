@@ -1278,14 +1278,20 @@ export const ANALYSIS_CATEGORIES = [
 // own absence):
 //   { chapters, phrases, trackBeats, trackPeaks, trackSpectrogram,
 //     durationMs, focusedIdx, onFocus }
+//
+// `categories` defaults to the full ANALYSIS_CATEGORIES list. Callers
+// can pass a filtered subset — e.g. FunscriptForge omits 'phrases'
+// because phrases are owned by its Phrases tab and don't need a
+// surface here. Filter MUST preserve the original order; activeId
+// falls back to the first entry if the active one was removed.
 export function CategoryPanel({
   activeCategoryId = 'structure', onChange, status = 'loading',
-  data, error, onRetry,
+  data, error, onRetry, categories = ANALYSIS_CATEGORIES,
 }) {
-  const cat = ANALYSIS_CATEGORIES.find((c) => c.id === activeCategoryId) ?? ANALYSIS_CATEGORIES[0];
+  const cat = categories.find((c) => c.id === activeCategoryId) ?? categories[0];
   return (
     <div style={{ marginBottom: 18 }}>
-      <CategoryTabs activeId={cat.id} onChange={onChange} />
+      <CategoryTabs activeId={cat.id} onChange={onChange} categories={categories} />
       <div style={{
         padding: 16, borderRadius: '0 8px 8px 8px',
         background: 'var(--surface)', border: '1px solid var(--accent)',
@@ -1327,15 +1333,25 @@ function CategoryBody({ categoryId, categoryLabel, data }) {
 // read as a low→high gradient when the modes are listed in this order.
 // Exported so other surfaces (PhrasesTab list, Patterns drilldown) can
 // share the vocabulary.
+// Phrase mode palette. The label set matches videoflow.phrases.py's
+// classifier output — `tease / steady / edging / break / fast / slow`
+// — not the older shape_labeler vocabulary (steady/pulse/three_one/
+// tide/drift/burst/taper/swell), which was reverted (see
+// held-shape-labeler memory). Order is the canonical display order
+// the design uses, NOT a calm→driving gradient — drives strip
+// rendering + legend layout, not interpretation.
+//
+// Colors picked to match the v1 paint mock: muted purple (tease),
+// teal/green (steady), amber (edging), neutral grey (break), red
+// (fast), light blue (slow). Each is high-contrast against the dark
+// surface and distinguishable side-by-side in a chronological strip.
 export const PHRASE_MODE_COLORS = {
-  steady:    '#6b7280',
-  drift:     '#56b8e0',
-  tide:      '#14b8a6',
-  pulse:     '#84cc16',
-  three_one: '#eab308',
-  swell:     '#f97316',
-  taper:     '#f472b6',
-  burst:     '#ef4444',
+  tease:   '#c084fc',
+  steady:  '#34d399',
+  edging:  '#f59e0b',
+  break:   '#6b7280',
+  fast:    '#ef4444',
+  slow:    '#60a5fa',
 };
 
 function phraseModeColor(label) {
@@ -1514,182 +1530,154 @@ function formatDuration(ms) {
 }
 
 // ─── Phrases category body ────────────────────────────────────────
-// Per-chapter phrase-mode breakdown laid out chronologically. Each
-// card shows one chapter's mode distribution as a mini stacked bar.
-// A whole-track strip at the top gives the aggregate view; cards
-// below answer "and how does that distribution shift chapter to
-// chapter?" — the editing question the tab exists to surface.
+// Whole-track chronological phrase strip. Each phrase is one colored
+// block positioned by `at_ms` and sized by duration relative to the
+// whole track; color encodes mode. Below the strip, a percentage
+// legend per mode + the headline stat (N phrases · X.X per chapter).
 //
-// Modes are listed in PHRASE_MODE_COLORS order (calm → driving) so
-// the stacked bars read as a coherent gradient when modes cluster.
+// Distinct from the per-chapter mode tally that previously lived in
+// this category — the design intent is "one glance at the whole
+// track's phrasing shape," not a chapter-by-chapter drill. Per-
+// chapter exploration lives on the dedicated Phrases tab.
+//
+// Modes are ordered per PHRASE_MODE_COLORS in the legend (canonical
+// display order from the design); the strip itself is chronological.
 function PhrasesCategoryBody({ data }) {
   const phrases = data?.phrases ?? [];
   const chapters = data?.chapters ?? [];
-  const focusedIdx = data?.focusedIdx;
-  const onFocus = data?.onFocus;
+  const durationMs = Number.isFinite(data?.durationMs) ? data.durationMs : null;
 
   if (!phrases.length) {
-    return <EmptyCard height={120} message="No phrases sidecar yet — run analysis first." icon="list" />;
+    return <EmptyCard height={120} message="No phrases yet — analyze a project to populate." icon="list" />;
   }
 
   const total = phrases.length;
-  const allTally = tallyPhraseModes(phrases);
+  // Track end for the strip's x-axis. Prefer the project's durationMs
+  // (most accurate); fall back to the rightmost phrase end so the strip
+  // still renders before the project record has duration plumbed.
+  const trackMs = durationMs ?? Math.max(...phrases.map((p) => Number(p.end_ms) || 0), 1);
+
+  const tally = tallyPhraseModes(phrases);
   const paletteOrder = Object.keys(PHRASE_MODE_COLORS);
-  const orderModes = (tally) => [
+  // Order legend by canonical palette order; any unknown modes fall to
+  // the end alphabetized so they don't crowd the recognized ones.
+  const orderedTally = [
     ...paletteOrder
       .map((label) => tally.find((t) => t.label === label))
       .filter(Boolean),
     ...tally.filter((t) => !paletteOrder.includes(t.label))
       .sort((a, b) => a.label.localeCompare(b.label)),
   ];
-  const orderedAll = orderModes(allTally);
 
-  const durations = phrases
-    .map((p) => (p.end_ms ?? 0) - (p.at_ms ?? 0))
-    .filter((d) => d > 0)
-    .sort((a, b) => a - b);
-  const medianMs = durations.length ? durations[Math.floor(durations.length / 2)] : 0;
-
-  const byChapter = chapters.length ? bucketPhrasesByChapter(phrases, chapters) : {};
+  const perChapter = chapters.length ? (total / chapters.length) : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', gap: 18, alignItems: 'baseline', fontSize: 12, color: 'var(--text-muted)' }}>
-        <span><strong style={{ color: 'var(--text)' }}>{total}</strong> phrases</span>
-        <span>median duration <strong style={{ color: 'var(--text)' }}>{formatDuration(medianMs)}</strong></span>
-        <span>{orderedAll.length} mode{orderedAll.length === 1 ? '' : 's'}</span>
-      </div>
-
-      <div>
-        <div style={{
-          fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
-          textTransform: 'uppercase', letterSpacing: '0.06em',
-          marginBottom: 6,
-        }}>
-          Whole track · all phrases
-        </div>
-        <div style={{
-          display: 'flex', height: 16, borderRadius: 4, overflow: 'hidden',
-          border: '1px solid var(--border)',
-        }}>
-          {orderedAll.map((m) => (
-            <div
-              key={m.label}
-              title={`${m.label} · ${m.count} (${Math.round((m.count / total) * 100)}%)`}
-              style={{ flex: m.count, background: phraseModeColor(m.label) }}
-            />
-          ))}
-        </div>
-        <div style={{
-          display: 'flex', gap: 10, flexWrap: 'wrap',
-          marginTop: 6, fontSize: 10.5, color: 'var(--text-muted)',
-        }}>
-          {orderedAll.map((m) => (
-            <span key={m.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{
-                width: 8, height: 8, borderRadius: 2,
-                background: phraseModeColor(m.label),
-              }} />
-              <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '0.02em' }}>
-                {m.label.toUpperCase()}
-              </span>
-              <span style={{ color: 'var(--text-dim)' }}>{m.count}</span>
-            </span>
-          ))}
-        </div>
-      </div>
-
-      {chapters.length > 0 && (
-        <div>
-          <div style={{
-            fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
-            textTransform: 'uppercase', letterSpacing: '0.06em',
-            marginBottom: 6,
-          }}>
-            Per chapter · chronological
-          </div>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-            gap: 8,
-          }}>
-            {chapters.map((c, i) => {
-              const focused = i === focusedIdx;
-              const chPhrases = byChapter[i] ?? [];
-              const chOrdered = orderModes(tallyPhraseModes(chPhrases));
-              const chTotal = chPhrases.length;
-              return (
-                <button
-                  key={c.id ?? i}
-                  onClick={() => onFocus?.(i)}
-                  style={{
-                    display: 'flex', flexDirection: 'column', gap: 6,
-                    padding: '10px 12px',
-                    borderRadius: 6,
-                    border: '1px solid',
-                    borderColor: focused ? 'var(--accent)' : 'var(--border)',
-                    background: focused ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))' : 'var(--surface-2)',
-                    color: 'var(--text)',
-                    cursor: 'pointer', textAlign: 'left',
-                    fontFamily: 'inherit',
-                    minHeight: 84,
-                  }}
-                >
-                  <div style={{
-                    display: 'flex', alignItems: 'baseline',
-                    justifyContent: 'space-between', gap: 8,
-                  }}>
-                    <span style={{
-                      fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
-                      fontFamily: 'var(--font-mono)', letterSpacing: '0.04em',
-                    }}>
-                      {String(i + 1).padStart(2, '0')}
-                    </span>
-                    <span style={{
-                      fontSize: 10.5, color: 'var(--text-muted)',
-                      fontFamily: 'var(--font-mono)',
-                    }}>
-                      {chTotal} phrase{chTotal === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <div style={{
-                    fontSize: 12, fontWeight: 600,
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}>
-                    {c.name || `Chapter ${i + 1}`}
-                  </div>
-                  {chTotal === 0 ? (
-                    <div style={{
-                      height: 12, borderRadius: 3,
-                      border: '1px dashed var(--border)',
-                      marginTop: 'auto',
-                    }} />
-                  ) : (
-                    <div style={{
-                      display: 'flex', height: 12, borderRadius: 3,
-                      overflow: 'hidden', border: '1px solid var(--border)',
-                      marginTop: 'auto',
-                    }}>
-                      {chOrdered.map((m) => (
-                        <div
-                          key={m.label}
-                          title={`${m.label} · ${m.count}`}
-                          style={{
-                            flex: m.count,
-                            background: phraseModeColor(m.label),
-                          }}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <PhrasesChronoStrip phrases={phrases} trackMs={trackMs} />
+      <PhrasesLegendFooter
+        orderedTally={orderedTally}
+        total={total}
+        perChapter={perChapter}
+      />
     </div>
   );
+}
+
+// Chronological phrase strip. Each phrase = one absolute-positioned
+// block, left/width derived from at_ms / end_ms over trackMs. Block
+// gaps (~2px) come from `calc(width - 2px)` so adjacent same-mode
+// phrases still read as distinct units (Image 1 paint mock).
+//
+// minWidth of 4px on each block keeps very short phrases visible —
+// without it, a 200ms phrase on a 60min track would shrink to a few
+// pixels and disappear at common viewport widths.
+function PhrasesChronoStrip({ phrases, trackMs }) {
+  return (
+    <div style={{
+      position: 'relative', height: 36,
+      borderRadius: 4, overflow: 'hidden',
+      background: 'var(--surface-2)',
+    }}>
+      {phrases.map((p, i) => {
+        const startMs = Number(p.at_ms) || 0;
+        const endMs = Number(p.end_ms) || startMs;
+        const duration = Math.max(0, endMs - startMs);
+        if (duration <= 0) return null;
+        const leftPct = (startMs / trackMs) * 100;
+        const widthPct = (duration / trackMs) * 100;
+        const mode = p.mode || 'unknown';
+        return (
+          <div
+            key={p.id || i}
+            title={`${mode} · ${formatDuration(duration)} · ${formatTimecode(startMs)}–${formatTimecode(endMs)}`}
+            style={{
+              position: 'absolute',
+              left: `${leftPct}%`,
+              width: `calc(${widthPct}% - 2px)`,
+              top: 0, height: '100%',
+              minWidth: 4,
+              background: phraseModeColor(mode),
+              borderRadius: 2,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// Legend + headline stat. Per-mode percentages on the left (color dot
+// + label + integer %), right-aligned "N phrases · X.X per chapter"
+// summary. Matches the paint mock's bottom row.
+function PhrasesLegendFooter({ orderedTally, total, perChapter }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between',
+      alignItems: 'center', gap: 16, flexWrap: 'wrap',
+    }}>
+      <div style={{
+        display: 'flex', gap: 18, flexWrap: 'wrap',
+        fontSize: 12, color: 'var(--text-muted)',
+      }}>
+        {orderedTally.map((m) => {
+          const pct = Math.round((m.count / total) * 100);
+          return (
+            <span key={m.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{
+                width: 10, height: 10, borderRadius: 2,
+                background: phraseModeColor(m.label),
+              }} />
+              <strong style={{ color: 'var(--text)', textTransform: 'capitalize' }}>
+                {m.label}
+              </strong>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{pct}%</span>
+            </span>
+          );
+        })}
+      </div>
+      <div style={{
+        fontSize: 12, color: 'var(--text-dim)',
+        fontFamily: 'var(--font-mono)',
+      }}>
+        {total} phrases
+        {perChapter != null && ` · ${perChapter.toFixed(1)} per chapter`}
+      </div>
+    </div>
+  );
+}
+
+// Local timecode helper for phrase tooltips. Mm:ss for under-hour
+// phrases (the common case); hh:mm:ss only if a phrase straddles an
+// hour boundary, which shouldn't really happen but rendering an
+// honest value is cheap.
+function formatTimecode(ms) {
+  const totalSec = Math.max(0, Math.floor((ms || 0) / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
 }
 
 // ─── Beats category body ──────────────────────────────────────────
@@ -2227,10 +2215,10 @@ function linearSlopeArray(arr) {
   return (n * sxy - sx * sy) / denom;
 }
 
-function CategoryTabs({ activeId, onChange }) {
+function CategoryTabs({ activeId, onChange, categories = ANALYSIS_CATEGORIES }) {
   return (
     <div style={{ display: 'flex', gap: 6, marginBottom: 0 }}>
-      {ANALYSIS_CATEGORIES.map((c) => {
+      {categories.map((c) => {
         const isActive = c.id === activeId;
         return (
           <button

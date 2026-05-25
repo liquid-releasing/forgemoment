@@ -1183,9 +1183,18 @@ function _interpolateStops(stops, t) {
 //                The `color` prop is ignored in this mode; the fill still uses
 //                MONO_BLUE-style transparent backing so the curve reads cleanly
 //                on dark surfaces.
+//
+// maxVelocity (velocity mode only): optional absolute reference value to
+// normalise per-segment velocities against. Pass this when the caller wants
+// stable colors across zoom levels — without it, Sparkline computes max
+// from the provided `actions` (which are usually the *visible-window*
+// subset), so the same segment renders different colors at different zoom
+// levels. Callers compute maxVelocity once from the full track and pass it
+// in: `maxVelocity = max(|Δpos/Δt|) over all actions`. Omitted = legacy
+// per-window normalization (back-compat for any caller that doesn't care).
 export function Sparkline({
   actions, start, end, color = 'var(--accent)', filled = false, height = 30,
-  colorMode = 'solid',
+  colorMode = 'solid', maxVelocity,
 }) {
   if (!actions || actions.length === 0) {
     return <div style={{ height, background: 'var(--surface-2)', borderRadius: 3 }} />;
@@ -1202,8 +1211,13 @@ export function Sparkline({
       vels[i] = Math.abs(actions[i].pos - actions[i - 1].pos) / dt;
     }
     vels[0] = vels[1] ?? 0;
-    let maxVel = 0;
-    for (let i = 0; i < n; i++) if (vels[i] > maxVel) maxVel = vels[i];
+    // Reference max for the colormap denominator. Caller-provided value
+    // wins (stable across zoom); fallback computes from visible actions
+    // for back-compat with callers that don't pass one.
+    let maxVel = Number.isFinite(maxVelocity) && maxVelocity > 0 ? maxVelocity : 0;
+    if (!maxVel) {
+      for (let i = 0; i < n; i++) if (vels[i] > maxVel) maxVel = vels[i];
+    }
     if (maxVel === 0) maxVel = 1;
 
     const fillPath = filled

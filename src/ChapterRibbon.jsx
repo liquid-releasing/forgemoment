@@ -400,6 +400,12 @@ function Band({
   const borderColor = selected ? '#ffffff' : (isGrey ? 'rgba(255,255,255,0.12)' : `${tone}55`);
   const borderWidth = selected ? 2 : 1;
 
+  // When the kebab dropdown is open, the band needs to paint above its
+  // siblings so the menu (rendered inside the band's box) isn't covered
+  // by the next band in DOM order. Lifted up here so the wrapper can
+  // set zIndex; BandMenu reports its open state via onOpenChange.
+  const [menuOpen, setMenuOpen] = useState(false);
+
   const slice = useMemo(
     () => (actions || []).filter((a) => a.at >= band.at_ms && a.at <= band.end_ms),
     [actions, band.at_ms, band.end_ms],
@@ -435,7 +441,11 @@ function Band({
         background: bgWash,
         border: `${borderWidth}px solid ${borderColor}`,
         borderRadius: 6,
-        overflow: 'hidden',
+        // No `overflow: hidden` here on purpose — the BandMenu dropdown
+        // needs to escape the band's bounds to render on top of adjacent
+        // bands. Sparkline clipping moves down to the inner inset:4
+        // wrapper below, which has its own overflow:hidden + matching
+        // border-radius so the visual is identical.
         cursor: 'pointer',
         // Selected chapter stays at full opacity; others subdue noticeably
         // so the active one reads as the focus. Earlier value (0.85) was
@@ -443,11 +453,12 @@ function Band({
         // 2026-05-17). 0.55 matches the patterns strip's wash convention.
         opacity: selected ? 1 : 0.55,
         boxSizing: 'border-box',
+        zIndex: menuOpen ? 50 : 'auto',
       }}
     >
       {/* Waveform fills the band's interior. Sparkline auto-sizes to its
           container, so it adapts as the viewport zooms. */}
-      <div style={{ position: 'absolute', inset: 4 }}>
+      <div style={{ position: 'absolute', inset: 4, overflow: 'hidden', borderRadius: 4 }}>
         <Sparkline
           actions={slice}
           start={band.at_ms}
@@ -503,15 +514,16 @@ function Band({
       )}
 
       {showMenu && menu && menu.length > 0 && (
-        <BandMenu band={band} menu={menu} index={index} />
+        <BandMenu band={band} menu={menu} index={index} onOpenChange={setMenuOpen} />
       )}
     </div>
   );
 }
 
-function BandMenu({ band, menu, index }) {
+function BandMenu({ band, menu, index, onOpenChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -531,8 +543,14 @@ function BandMenu({ band, menu, index }) {
         aria-label="Band actions"
         style={{
           width: 22, height: 22, borderRadius: 5,
-          background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(255,255,255,0.15)',
-          color: 'var(--text)', cursor: 'pointer', fontFamily: 'inherit',
+          // Light-grey overlay with dark dots — high-contrast against any
+          // chapter color, so the kebab reads as available rather than
+          // hidden. Previously rgba(0,0,0,0.45) + white icon, which
+          // disappeared into the band color on dim chapters.
+          background: 'rgba(230,230,230,0.92)',
+          border: '1px solid rgba(0,0,0,0.15)',
+          color: 'rgba(20,20,20,0.85)',
+          cursor: 'pointer', fontFamily: 'inherit',
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         }}
       >

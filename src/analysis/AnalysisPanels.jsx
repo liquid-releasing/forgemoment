@@ -395,10 +395,18 @@ function paintEmptyTrack(ctx, w, h) {
 }
 
 // ─── Panel: pitch line ────────────────────────────────────────────
-// Continuous baseline curve over the whole file. Funscript → moving-
-// average velocity. Audio → spectral centroid (or amplitude envelope).
-// Distinct from the energy heatmap (which is chapter-binned). Useful
-// for "where does this script ramp up?" visual reading.
+// Continuous baseline curve over the whole file. Distinct from the
+// velocity heatmap above (intensity per moment) and the per-chapter
+// energy ribbon below (chapter-discrete). This row answers "where
+// does the script *sit* over time, and how does it drift?"
+//
+// Source modes:
+//   funscript → smoothed position centerline (mean `pos` over a
+//               sliding window). High = pegging up, low = retreated.
+//   audio     → spectral centroid when a mel spectrogram is available
+//               (bright/percussive vs. dark/bass), else amplitude
+//               envelope as a fallback.
+//   motion    → smoothed motion magnitude (deferred).
 export function PitchLine({
   status = 'loading', source, durationMs, error, onRetry,
 }) {
@@ -412,9 +420,239 @@ export function PitchLine({
       {status === 'error'   ? <ErrorCard height={64} message={error} onRetry={onRetry} /> :
        status === 'empty'   ? <EmptyCard height={64} message="No pitch source available." icon="trending-up" /> :
        status === 'loading' ? <Skeleton height={64} label="Computing pitch baseline…" /> :
-                              <Skeleton height={64} label="Pitch renderer pending" />}
+       source                ? <PitchLineCanvas source={source} durationMs={durationMs} height={64} /> :
+                              <EmptyCard height={64} message="Source unavailable." icon="trending-up" />}
     </PanelShell>
   );
+}
+
+function PitchLineCanvas({ source, durationMs, height = 64 }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    if (!wrapRef.current) return undefined;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !width) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.floor(width);
+    const h = height;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    if (source?.kind === 'funscript') {
+      paintFunscriptPitch(ctx, w, h, source, durationMs);
+    } else if (source?.kind === 'audio' && source.cells && source.nMels) {
+      paintAudioSpectrogramPitch(ctx, w, h, source);
+    } else if (source?.kind === 'audio' && source.peaks) {
+      paintAudioPeaksPitch(ctx, w, h, source);
+    } else {
+      paintEmptyTrack(ctx, w, h);
+    }
+  }, [width, height, source, durationMs]);
+
+  return (
+    <div ref={wrapRef} style={{
+      width: '100%', borderRadius: 8, overflow: 'hidden',
+      background: 'var(--bg)', border: '1px solid var(--border)',
+    }}>
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
+// Funscript pitch = smoothed position centerline. Bucket actions into
+// pixel columns, take the mean `pos` per column (with carry-forward
+// across empty columns so sparse regions don't snap to zero), then
+// smooth with a small moving-average window. Funscript pos is 0..100;
+// high values draw at the top of the chart.
+function paintFunscriptPitch(ctx, w, h, source, fallbackDurationMs) {
+  const actions = source.actions;
+  if (!actions || actions.length < 2) { paintEmptyTrack(ctx, w, h); return; }
+  const lastAt = actions[actions.length - 1].at;
+  const total = Math.max(1, source.durationMs ?? fallbackDurationMs ?? lastAt);
+
+  const sumPos = new Float32Array(w);
+  const cnt = new Uint16Array(w);
+  for (let i = 0; i < actions.length; i++) {
+    const a = actions[i];
+    const x = Math.max(0, Math.min(w - 1, Math.floor((a.at / total) * w)));
+    sumPos[x] += a.pos;
+    cnt[x] += 1;
+  }
+
+  // Mean per column with carry-forward for empty columns. Seed `last`
+  // from the first action so the curve doesn't start at 50 (which would
+  // create a spurious dip-or-rise opening).
+  const mean = new Float32Array(w);
+  let last = actions[0].pos;
+  for (let i = 0; i < w; i++) {
+    if (cnt[i] > 0) { mean[i] = sumPos[i] / cnt[i]; last = mean[i]; }
+    else mean[i] = last;
+  }
+
+  // Smoothing radius scales with width — fixed pixel count would
+  // look noisy on wide windows and over-smoothed on narrow ones.
+  const radius = Math.max(4, Math.floor(w / 48));
+  const smoothed = movingAverage(mean, radius);
+  paintPitchTrace(ctx, w, h, smoothed, 0, 100);
+}
+
+// Audio pitch (spectrogram path) = spectral centroid. For each frame,
+// the centroid = Σ(i · mag[i]) / Σ(mag[i]) over mel bins — i.e. the
+// "center of mass" of the spectrum. Higher = brighter / more high-freq
+// content (cymbals, vocals), lower = darker / bass-heavy.
+function paintAudioSpectrogramPitch(ctx, w, h, source) {
+  const cells = source.cells;
+  const nMels = source.nMels;
+  if (!cells || !cells.length || !nMels) { paintEmptyTrack(ctx, w, h); return; }
+  const frames = Math.floor(cells.length / nMels);
+  if (frames < 2) { paintEmptyTrack(ctx, w, h); return; }
+
+  const centroids = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) {
+    const base = f * nMels;
+    let num = 0; let den = 0;
+    for (let i = 0; i < nMels; i++) {
+      const m = cells[base + i];
+      num += i * m;
+      den += m;
+    }
+    centroids[f] = den > 1e-9 ? num / den : 0;
+  }
+
+  // Bin frames into pixel columns (mean centroid per column).
+  const values = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    const f0 = Math.floor(x * frames / w);
+    const f1 = Math.max(f0 + 1, Math.floor((x + 1) * frames / w));
+    let s = 0; let n = 0;
+    for (let f = f0; f < f1 && f < frames; f++) { s += centroids[f]; n++; }
+    values[x] = n > 0 ? s / n : 0;
+  }
+
+  const radius = Math.max(2, Math.floor(w / 60));
+  const smoothed = movingAverage(values, radius);
+  // Auto-fit to observed range — spectral centroid for typical music
+  // lives in a narrow band (often the lower third of the mel range),
+  // so normalising against 0..nMels-1 crushes the curve against the
+  // bottom. A 5% pad on each end keeps it off the edges.
+  const [lo, hi] = autoRange(smoothed, 0.05);
+  paintPitchTrace(ctx, w, h, smoothed, lo, hi);
+}
+
+// Audio pitch (peaks fallback) = smoothed amplitude envelope. Used
+// when we only have onset peaks, not a spectrogram. Less informative
+// than the centroid but gives the eye *something* to follow before the
+// spectrogram stage lands.
+function paintAudioPeaksPitch(ctx, w, h, source) {
+  const peaks = source.peaks;
+  if (!peaks || peaks.length === 0) { paintEmptyTrack(ctx, w, h); return; }
+
+  const values = new Float32Array(w);
+  const samplesPerPx = peaks.length / w;
+  for (let x = 0; x < w; x++) {
+    const start = Math.floor(x * samplesPerPx);
+    const end = Math.max(start + 1, Math.floor((x + 1) * samplesPerPx));
+    let s = 0; let n = 0;
+    for (let i = start; i < end && i < peaks.length; i++) {
+      s += Math.max(0, Math.min(1, peaks[i])); n++;
+    }
+    values[x] = n > 0 ? s / n : 0;
+  }
+
+  const radius = Math.max(2, Math.floor(w / 60));
+  const smoothed = movingAverage(values, radius);
+  paintPitchTrace(ctx, w, h, smoothed, 0, 1);
+}
+
+// Auto-fit a curve to its observed range with a fractional pad on
+// each end. Guards against zero-range data by returning a tiny window
+// around the constant value so paintPitchTrace doesn't divide by zero.
+function autoRange(values, pad = 0.05) {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (!isFinite(lo) || !isFinite(hi) || hi <= lo) {
+    const c = isFinite(lo) ? lo : 0;
+    return [c - 0.5, c + 0.5];
+  }
+  const span = hi - lo;
+  return [lo - span * pad, hi + span * pad];
+}
+
+// Prefix-sum-based moving average — O(n) regardless of radius, so we
+// can crank the window up for wider canvases without slowing down.
+function movingAverage(arr, radius) {
+  const n = arr.length;
+  const prefix = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) prefix[i + 1] = prefix[i] + arr[i];
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - radius);
+    const hi = Math.min(n, i + radius + 1);
+    out[i] = (prefix[hi] - prefix[lo]) / (hi - lo);
+  }
+  return out;
+}
+
+// Draws the actual line: faint midline reference, filled area under
+// the curve, then the line itself on top. Uses the canonical accent
+// color so it reads as a sibling of the other forgemoment visuals
+// without competing with the velocity heatmap's red-blue gradient.
+function paintPitchTrace(ctx, w, h, values, vMin, vMax) {
+  const padTop = 6;
+  const padBot = 6;
+  const usable = h - padTop - padBot;
+  const range = Math.max(1e-6, vMax - vMin);
+
+  const yAt = (v) => {
+    const t = Math.min(1, Math.max(0, (v - vMin) / range));
+    return padTop + (1 - t) * usable; // high value = top
+  };
+
+  // Midline reference (50% / centroid of range).
+  const yMid = yAt((vMin + vMax) / 2);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, yMid);
+  ctx.lineTo(w, yMid);
+  ctx.stroke();
+
+  // Filled area under the curve.
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  ctx.lineTo(0, yAt(values[0]));
+  for (let x = 1; x < w; x++) ctx.lineTo(x, yAt(values[x]));
+  ctx.lineTo(w - 1, h);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(86, 184, 224, 0.12)';
+  ctx.fill();
+
+  // The line itself.
+  ctx.beginPath();
+  ctx.moveTo(0, yAt(values[0]));
+  for (let x = 1; x < w; x++) ctx.lineTo(x, yAt(values[x]));
+  ctx.strokeStyle = 'rgba(86, 184, 224, 0.95)';
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
 }
 
 // ─── Panel: beat strength bars ────────────────────────────────────

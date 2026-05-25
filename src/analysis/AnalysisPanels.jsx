@@ -684,39 +684,519 @@ function paintPitchTrace(ctx, w, h, values, vMin, vMax) {
   ctx.stroke();
 }
 
+// ─── Panel: tempo map (local BPM curve) ───────────────────────────
+// Local BPM over time, computed from `beatsMs`. Distinct from the
+// global BPM number in the KPI strip — drums getting faster going
+// into a drop, slower in breakdowns. Collapsing the whole rhythmic
+// dimension to one number hides those swings; this panel surfaces
+// them so a script can be evaluated against the music's pulse.
+//
+// Algorithm:
+//   ioi[i] = beats[i+1] - beats[i]                    (inter-onset)
+//   localBpm[i] = 60_000 / mean(ioi over ±K/2 around i)
+// K = 12 is the smoothing window. Smaller = more responsive but
+// noisier; larger = smoother but lags real tempo changes.
+//
+// Visual: accent-color curve over a faint horizontal reference at
+// the global BPM. Same band/axis vocabulary as PitchLine — reads as
+// a sibling row, not a competing chart.
+export function TempoMap({
+  status = 'loading', beats, globalBpm, durationMs, error, onRetry,
+}) {
+  const beatList = Array.isArray(beats) ? beats : (beats?.beatsMs ?? null);
+  return (
+    <PanelShell
+      eyebrow="Tempo map"
+      right={<SourceBadge kind="audio" />}
+    >
+      {status === 'error'   ? <ErrorCard height={64} message={error} onRetry={onRetry} /> :
+       status === 'empty'   ? <EmptyCard height={64} message="No beat data — analyze media first." icon="activity" /> :
+       status === 'loading' ? <Skeleton height={64} label="Computing local BPM…" /> :
+       (beatList?.length ?? 0) >= 3
+         ? <TempoMapCanvas beats={beatList} globalBpm={globalBpm}
+                            durationMs={durationMs} height={64} />
+         : <EmptyCard height={64} message="Need at least 3 beats to chart tempo." icon="activity" />}
+    </PanelShell>
+  );
+}
+
+function TempoMapCanvas({ beats, globalBpm, durationMs, height = 64 }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    if (!wrapRef.current) return undefined;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !width) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.floor(width);
+    const h = height;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    paintTempoCurve(ctx, w, h, beats, globalBpm, durationMs);
+  }, [width, height, beats, globalBpm, durationMs]);
+
+  return (
+    <div ref={wrapRef} style={{
+      width: '100%', borderRadius: 8, overflow: 'hidden',
+      background: 'var(--bg)', border: '1px solid var(--border)',
+    }}>
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
+// Compute local BPM per beat, then resample onto the pixel axis and
+// paint. Total ≈ max(lastBeat, durationMs) so the curve ends at the
+// right edge whether the project carries a duration or not.
+function paintTempoCurve(ctx, w, h, beats, globalBpm, durationMs) {
+  const n = beats.length;
+  if (n < 3) { paintEmptyTrack(ctx, w, h); return; }
+
+  // Local BPM per beat. K is window radius in IOIs on each side.
+  const K = 6;
+  const local = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - K);
+    const hi = Math.min(n - 1, i + K);
+    let sumIoi = 0; let count = 0;
+    for (let j = lo; j < hi; j++) {
+      const ioi = beats[j + 1] - beats[j];
+      if (ioi > 0) { sumIoi += ioi; count++; }
+    }
+    local[i] = count > 0 ? 60_000 / (sumIoi / count) : 0;
+  }
+
+  const total = Math.max(beats[n - 1], durationMs ?? 0) || beats[n - 1];
+
+  // Resample to per-pixel curve. For each x, find the surrounding
+  // beats and linearly interpolate their local BPM. Beats are sparse
+  // relative to pixels; linear interp keeps the curve smooth.
+  const values = new Float32Array(w);
+  let bi = 0;
+  for (let x = 0; x < w; x++) {
+    const t = (x / Math.max(1, w - 1)) * total;
+    while (bi < n - 1 && beats[bi + 1] < t) bi++;
+    if (bi >= n - 1) { values[x] = local[n - 1]; continue; }
+    if (t <= beats[bi]) { values[x] = local[bi]; continue; }
+    const span = beats[bi + 1] - beats[bi];
+    const frac = span > 0 ? (t - beats[bi]) / span : 0;
+    values[x] = local[bi] + (local[bi + 1] - local[bi]) * frac;
+  }
+
+  // Range: pad observed [lo, hi] symmetrically by 8% to give the
+  // line breathing room. If the user has globalBpm, ensure it falls
+  // inside the range so the reference line is always visible.
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (local[i] > 0 && local[i] < lo) lo = local[i];
+    if (local[i] > hi) hi = local[i];
+  }
+  if (!isFinite(lo) || !isFinite(hi) || hi <= lo) {
+    const c = isFinite(lo) && lo > 0 ? lo : (globalBpm ?? 120);
+    lo = c - 5; hi = c + 5;
+  }
+  if (globalBpm != null && isFinite(globalBpm)) {
+    lo = Math.min(lo, globalBpm);
+    hi = Math.max(hi, globalBpm);
+  }
+  const span = Math.max(2, hi - lo);
+  const vMin = lo - span * 0.08;
+  const vMax = hi + span * 0.08;
+
+  const padTop = 6;
+  const padBot = 6;
+  const usable = h - padTop - padBot;
+  const range = Math.max(1e-6, vMax - vMin);
+  const yAt = (v) => padTop + (1 - (v - vMin) / range) * usable;
+
+  // Global BPM reference line (faint, behind the curve).
+  if (globalBpm != null && isFinite(globalBpm)) {
+    const yRef = yAt(globalBpm);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(0, yRef);
+    ctx.lineTo(w, yRef);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Filled area under the curve (same accent family as PitchLine).
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  ctx.lineTo(0, yAt(values[0]));
+  for (let x = 1; x < w; x++) ctx.lineTo(x, yAt(values[x]));
+  ctx.lineTo(w - 1, h);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(86, 184, 224, 0.12)';
+  ctx.fill();
+
+  // The line itself.
+  ctx.beginPath();
+  ctx.moveTo(0, yAt(values[0]));
+  for (let x = 1; x < w; x++) ctx.lineTo(x, yAt(values[x]));
+  ctx.strokeStyle = 'rgba(86, 184, 224, 0.95)';
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+}
+
 // ─── Panel: beat strength bars ────────────────────────────────────
 // Vertical bars (one per detected beat) with downbeats accented. The
-// headline visualization — communicates rhythm at a glance. Chapter
-// ribbon strip underneath maps each beat to its chapter.
+// headline rhythm visualization. Per-beat height comes from the audio
+// peaks envelope sampled at each beat's ms position when `peaks` is
+// provided — that maps "the data we have" (beat times + amplitude
+// envelope) onto the eyebrow's "per-beat envelope" promise. Without
+// peaks, every beat renders at a uniform mid-height so the grid still
+// communicates rhythm.
+//
+// Focused chapter (if `chapters` + `focusedIdx`) paints a subtle band
+// behind the bars in that chapter's time range — visual context for
+// "these beats belong to the chapter you're drilling into below."
 export function BeatStrengthBars({
-  status = 'loading', beats, downbeats, chapters,
+  status = 'loading', beats, downbeats, chapters, peaks, peaksHopMs,
   durationMs, focusedIdx, onFocus, error, onRetry,
 }) {
+  const beatList = Array.isArray(beats) ? beats : (beats?.beatsMs ?? null);
+  const downbeatList = Array.isArray(downbeats) ? downbeats : (downbeats?.downbeatsMs ?? null);
   return (
-    <PanelShell eyebrow="Beat strength · per-beat envelope">
+    <PanelShell
+      eyebrow="Beat strength · per-beat envelope"
+      right={beatList?.length ? (
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+          {beatList.length} beats
+          {downbeatList?.length ? ` · ${downbeatList.length} downbeats` : ''}
+        </span>
+      ) : null}
+    >
       {status === 'error'   ? <ErrorCard height={140} message={error} onRetry={onRetry} /> :
        status === 'empty'   ? <EmptyCard height={140} message="No beats detected yet." icon="activity" /> :
        status === 'loading' ? <Skeleton height={140} label="Detecting beats…" /> :
-                              <Skeleton height={140} label="Beat renderer pending" />}
+       beatList?.length      ? <BeatStrengthCanvas
+                                  beats={beatList}
+                                  downbeats={downbeatList}
+                                  chapters={chapters}
+                                  peaks={peaks}
+                                  peaksHopMs={peaksHopMs}
+                                  durationMs={durationMs}
+                                  focusedIdx={focusedIdx}
+                                  onFocus={onFocus}
+                                  height={140}
+                                /> :
+                              <EmptyCard height={140} message="No beats in this track." icon="activity" />}
     </PanelShell>
   );
+}
+
+// Beat-strength painter. Layout (top → bottom inside `height`):
+//   • optional focused-chapter background band, full height, very low alpha
+//   • bars: each beat = thin vertical bar; height = envelope amplitude at
+//     the beat's ms (peaks-derived), normalised to the 95th percentile so
+//     a single loud transient doesn't compress the rest
+//   • baseline: 1px line at the bottom, faint white
+//
+// Bars vs envelope curve: we deliberately render discrete bars (not a
+// continuous envelope curve) because the question this panel answers is
+// "how does each beat hit?", not "what does the amplitude look like
+// overall?". The Pitch Line row above already shows the continuous
+// shape. This row's job is the beat grid.
+function BeatStrengthCanvas({
+  beats, downbeats, chapters, peaks, peaksHopMs,
+  durationMs, focusedIdx, onFocus, height = 140,
+}) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    if (!wrapRef.current) return undefined;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // Click-to-focus — pick the chapter under the click's x. Mirrors the
+  // ChapterStripPanel UX so the two surfaces feel like the same control.
+  const handleClick = (e) => {
+    if (!onFocus || !chapters?.length || !durationMs) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const t = (x / rect.width) * durationMs;
+    const i = chapters.findIndex((c) => t >= (c.atMs ?? 0) && t < (c.endMs ?? durationMs));
+    if (i >= 0) onFocus(i);
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !width) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.floor(width);
+    const h = height;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    // Total time — prefer explicit durationMs; fall back to last beat
+    // so the panel still renders if the project's duration hasn't been
+    // hydrated yet.
+    const lastBeat = beats[beats.length - 1] ?? 0;
+    const total = Math.max(1, durationMs ?? lastBeat);
+
+    paintFocusedChapterBand(ctx, w, h, chapters, focusedIdx, total);
+
+    // Per-beat strength. With peaks: sample envelope at beat ms with a
+    // tiny smoothing window (±1 hop) so a beat that lands between two
+    // hops doesn't quantise to a single noisy sample. Without peaks:
+    // uniform 0.75 — visible, but not loud enough to claim it's data
+    // (full height would imply "we measured this").
+    const strengths = new Float32Array(beats.length);
+    if (peaks?.length && peaksHopMs) {
+      const tmp = new Float32Array(beats.length);
+      for (let i = 0; i < beats.length; i++) {
+        tmp[i] = envelopeAtMs(peaks, peaksHopMs, beats[i]);
+      }
+      // Normalise to 95th percentile (same idea as the velocity heatmap).
+      const sorted = Array.from(tmp).sort((a, b) => a - b);
+      const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
+      const ref = Math.max(0.02, p95);
+      for (let i = 0; i < beats.length; i++) {
+        strengths[i] = Math.min(1, tmp[i] / ref);
+      }
+    } else {
+      strengths.fill(0.75);
+    }
+
+    // Downbeat lookup — O(1) per beat. Downbeats are a subset of beats,
+    // typically every 4th. We mark by ms equality with a small tolerance
+    // since both arrays come from the same librosa run; exact match works.
+    const downbeatSet = new Set(downbeats || []);
+
+    paintBeatBars(ctx, w, h, beats, downbeatSet, strengths, total);
+  }, [width, height, beats, downbeats, chapters, peaks, peaksHopMs,
+      durationMs, focusedIdx]);
+
+  return (
+    <div
+      ref={wrapRef}
+      onClick={handleClick}
+      style={{
+        width: '100%', borderRadius: 8, overflow: 'hidden',
+        background: 'var(--bg)', border: '1px solid var(--border)',
+        cursor: onFocus && chapters?.length ? 'pointer' : 'default',
+      }}
+    >
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
+// Sample peaks envelope at an absolute ms position with a small smoothing
+// window (±1 hop). Clamped to [0,1]; returns 0 outside the peaks range.
+function envelopeAtMs(peaks, hopMs, ms) {
+  const center = Math.floor(ms / hopMs);
+  if (center < 0 || center >= peaks.length) return 0;
+  const lo = Math.max(0, center - 1);
+  const hi = Math.min(peaks.length - 1, center + 1);
+  let s = 0;
+  let n = 0;
+  for (let i = lo; i <= hi; i++) {
+    s += Math.max(0, Math.min(1, peaks[i]));
+    n++;
+  }
+  return n > 0 ? s / n : 0;
+}
+
+function paintFocusedChapterBand(ctx, w, h, chapters, focusedIdx, total) {
+  if (!chapters?.length || focusedIdx == null || focusedIdx < 0) return;
+  const c = chapters[focusedIdx];
+  if (!c) return;
+  const x0 = Math.max(0, Math.floor(((c.atMs ?? 0) / total) * w));
+  const x1 = Math.min(w, Math.ceil(((c.endMs ?? total) / total) * w));
+  const color = c.color || 'var(--accent-2)';
+  ctx.fillStyle = `color-mix(in srgb, ${color} 14%, transparent)`;
+  ctx.fillRect(x0, 0, x1 - x0, h);
+}
+
+function paintBeatBars(ctx, w, h, beats, downbeatSet, strengths, total) {
+  const padTop = 10;
+  const padBot = 12;
+  const baseline = h - padBot;
+  const usable = baseline - padTop;
+
+  // Baseline.
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, baseline + 0.5);
+  ctx.lineTo(w, baseline + 0.5);
+  ctx.stroke();
+
+  // Beats. Min bar height = 8% of usable so quiet beats are still visible.
+  const beatColor = 'rgba(255, 255, 255, 0.42)';
+  const downbeatColor = 'rgba(86, 184, 224, 0.95)';
+  for (let i = 0; i < beats.length; i++) {
+    const t = beats[i] / total;
+    if (t < 0 || t > 1) continue;
+    const x = Math.floor(t * w);
+    const strength = Math.max(0.08, strengths[i]);
+    const barH = strength * usable;
+    const isDownbeat = downbeatSet.has(beats[i]);
+    ctx.fillStyle = isDownbeat ? downbeatColor : beatColor;
+    const barW = isDownbeat ? 2 : 1;
+    ctx.fillRect(x - Math.floor(barW / 2), baseline - barH, barW, barH);
+  }
 }
 
 // ─── Panel: energy heatmap ────────────────────────────────────────
 // Per-chapter energy stripe — hot reds for energetic chapters, cool
 // blues for calm. Click-to-focus. Chapter-discrete, contrast to the
 // continuous pitch line above.
+//
+// Two data-source modes:
+//   1. `energy: number[]` — pre-computed, one value per chapter, in
+//      whatever units the caller chose. We min-max normalise across
+//      the array so the brightest chapter pegs red, quietest pegs blue.
+//   2. `spectrogram: { cells, nMels, nFrames, hopMs }` — raw mel data.
+//      We compute per-chapter mean cell intensity inline (cheap; for a
+//      ~1hr file at hopMs=20, nMels=64 that's ~12M cells = ~30ms).
+//
+// Either mode produces the same colored ribbon. AnalysisTab currently
+// hands us the spectrogram; ForgeGen may pre-compute and pass `energy`.
 export function EnergyHeatRibbon({
-  status = 'loading', chapters, energy, durationMs,
+  status = 'loading', chapters, energy, spectrogram, durationMs,
   focusedIdx, onFocus, error, onRetry,
 }) {
+  // Derive per-chapter energies. Prefer caller-provided `energy`;
+  // otherwise compute from spectrogram. Returns null when neither is
+  // available (renders as empty card).
+  const perChapter = chapters?.length ? (
+    Array.isArray(energy) && energy.length === chapters.length
+      ? energy
+      : spectrogram?.cells?.length && spectrogram.hopMs
+        ? perChapterEnergyFromSpectrogram(chapters, spectrogram, durationMs)
+        : null
+  ) : null;
+
   return (
     <PanelShell eyebrow="Energy heat ribbon" right={<span style={{ fontSize: 11, color: 'var(--text-dim)' }}>per chapter</span>}>
       {status === 'error'   ? <ErrorCard height={42} message={error} onRetry={onRetry} /> :
        status === 'empty'   ? <EmptyCard height={42} message="No energy data yet." icon="zap" /> :
        status === 'loading' ? <Skeleton height={42} label="Computing per-chapter energy…" /> :
-                              <Skeleton height={42} label="Energy renderer pending" />}
+       perChapter            ? <EnergyHeatRibbonBody
+                                  chapters={chapters}
+                                  energies={perChapter}
+                                  durationMs={durationMs}
+                                  focusedIdx={focusedIdx}
+                                  onFocus={onFocus}
+                                /> :
+                              <EmptyCard height={42} message="No chapters or spectrogram yet." icon="zap" />}
     </PanelShell>
+  );
+}
+
+// Per-chapter mean spectrogram intensity. For each chapter we average
+// every cell value across its time range and all mel bins. Single pass
+// over cells, O(nFrames * nMels). The sum-then-divide approach trades
+// peak intensity (which would highlight transients) for sustained
+// energy — what "this whole chapter is energetic" actually means.
+function perChapterEnergyFromSpectrogram(chapters, spectrogram, durationMs) {
+  const { cells, nMels, hopMs, nFrames } = spectrogram;
+  const frames = nFrames ?? Math.floor(cells.length / nMels);
+  const out = new Array(chapters.length).fill(0);
+
+  for (let ci = 0; ci < chapters.length; ci++) {
+    const c = chapters[ci];
+    const atMs = c.atMs ?? 0;
+    const endMs = c.endMs ?? durationMs ?? (frames * hopMs);
+    const f0 = Math.max(0, Math.floor(atMs / hopMs));
+    const f1 = Math.min(frames, Math.ceil(endMs / hopMs));
+    if (f1 <= f0) continue;
+
+    let sum = 0;
+    let count = 0;
+    for (let f = f0; f < f1; f++) {
+      const base = f * nMels;
+      for (let b = 0; b < nMels; b++) {
+        sum += cells[base + b];
+        count++;
+      }
+    }
+    // Mean in [0,255] → normalise to [0,1].
+    out[ci] = count > 0 ? (sum / count) / 255 : 0;
+  }
+
+  return out;
+}
+
+function EnergyHeatRibbonBody({ chapters, energies, durationMs, focusedIdx, onFocus }) {
+  // Min-max normalise across chapters so the colormap uses the full
+  // gradient even when raw energies live in a narrow band. Without this
+  // step a project where every chapter sat at ~0.4 mean intensity would
+  // render as a uniform mid-green strip — true to the numbers but
+  // useless for comparison. Min floor at 0.05 of span prevents a single
+  // outlier (a silent intro chapter, say) from collapsing everything
+  // else to the top of the gradient.
+  const lo = Math.min(...energies);
+  const hi = Math.max(...energies);
+  const span = Math.max(0.05, hi - lo);
+
+  return (
+    <div style={{
+      display: 'flex', height: 42, gap: 0, minWidth: 0,
+      borderRadius: 8, overflow: 'hidden',
+      background: 'var(--surface-2)', border: '1px solid var(--border)',
+    }}>
+      {chapters.map((c, i) => {
+        const dur = (c.endMs ?? 0) - (c.atMs ?? 0);
+        const flex = Math.max(0.0001, dur / (durationMs || 1));
+        const focused = i === focusedIdx;
+        const t = (energies[i] - lo) / span;
+        const color = interpolateColorStops(VELOCITY_COLOR_STOPS, Math.min(1, Math.max(0, t)));
+        const label = `${Math.round(energies[i] * 100)}`;
+        return (
+          <button
+            key={c.id ?? i}
+            onClick={() => onFocus?.(i)}
+            title={`Chapter ${i + 1} · energy ${label}`}
+            style={{
+              flex, minWidth: 0,
+              background: color,
+              border: 'none',
+              cursor: 'pointer', textAlign: 'center',
+              padding: 0, color: '#fff',
+              fontFamily: 'inherit',
+              outline: focused ? '1px solid rgba(255,255,255,0.45)' : 'none',
+              outlineOffset: -1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 10.5, fontWeight: 700,
+              letterSpacing: '0.04em',
+              textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+              opacity: focusedIdx == null || focused ? 1 : 0.85,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -794,6 +1274,10 @@ export const ANALYSIS_CATEGORIES = [
     desc:     'Where the script\'s baseline lives and how it drifts over the run.' },
 ];
 
+// `data` shape (all fields optional — each sub-renderer handles its
+// own absence):
+//   { chapters, phrases, trackBeats, trackPeaks, trackSpectrogram,
+//     durationMs, focusedIdx, onFocus }
 export function CategoryPanel({
   activeCategoryId = 'structure', onChange, status = 'loading',
   data, error, onRetry,
@@ -816,10 +1300,749 @@ export function CategoryPanel({
         {status === 'error'   ? <ErrorCard height={120} message={error} onRetry={onRetry} /> :
          status === 'empty'   ? <EmptyCard height={120} message={`No ${cat.label.toLowerCase()} data yet.`} icon={cat.icon} /> :
          status === 'loading' ? <Skeleton height={120} label={`Loading ${cat.label.toLowerCase()}…`} /> :
-                                <Skeleton height={120} label={`${cat.label} renderer pending`} />}
+                                <CategoryBody categoryId={cat.id} categoryLabel={cat.label} data={data} />}
       </div>
     </div>
   );
+}
+
+// Dispatch to per-category renderer. Each renderer is responsible for
+// its own empty state if it gets no data — the panel-level "ready"
+// status only means "the upstream pipeline finished," not "this tab
+// has data" (e.g. structure has chapters but phrases sidecar might
+// be missing — Structure renders chapters with a "no phrases" hint).
+function CategoryBody({ categoryId, categoryLabel, data }) {
+  switch (categoryId) {
+    case 'structure': return <StructureCategoryBody data={data} />;
+    case 'phrases':   return <PhrasesCategoryBody data={data} />;
+    case 'beats':     return <BeatsCategoryBody data={data} />;
+    case 'energy':    return <EnergyCategoryBody data={data} />;
+    case 'pitch':     return <PitchCategoryBody data={data} />;
+    default: return <Skeleton height={120} label={`${categoryLabel} renderer pending`} />;
+  }
+}
+
+// Phrase-mode palette — the 8 shape ids from assessment/shape_labeler.py.
+// Loosely ordered by intensity (calm → driving), so multi-mode chapters
+// read as a low→high gradient when the modes are listed in this order.
+// Exported so other surfaces (PhrasesTab list, Patterns drilldown) can
+// share the vocabulary.
+export const PHRASE_MODE_COLORS = {
+  steady:    '#6b7280',
+  drift:     '#56b8e0',
+  tide:      '#14b8a6',
+  pulse:     '#84cc16',
+  three_one: '#eab308',
+  swell:     '#f97316',
+  taper:     '#f472b6',
+  burst:     '#ef4444',
+};
+
+function phraseModeColor(label) {
+  return PHRASE_MODE_COLORS[label] || 'var(--text-dim)';
+}
+
+// ─── Structure category body ──────────────────────────────────────
+// Chapter-by-chapter list. Each row shows the chapter's compound label
+// (texture · voice), duration, and a small tally of the phrase modes
+// inside it. Click a row to focus that chapter — sets focusedIdx, the
+// same state the chapter strip + energy ribbon read from.
+//
+// Phrase modes come from assessment/shape_labeler.py: one of 8 shape
+// ids. We tally them by chapter and render up to the top 3 as compact
+// "MODE × n" chips — enough to communicate the chapter's character
+// without overwhelming the row.
+function StructureCategoryBody({ data }) {
+  const chapters = data?.chapters ?? [];
+  const phrases = data?.phrases ?? [];
+  const focusedIdx = data?.focusedIdx;
+  const onFocus = data?.onFocus;
+
+  if (!chapters.length) {
+    return <EmptyCard height={120} message="No chapters yet — analysis pending." icon="layers" />;
+  }
+
+  // Bucket phrases by chapter_id (preferred) or chapter_idx fallback.
+  // chapter_id matches chapter.id; chapter_idx is positional. Old
+  // sidecars wrote one, new sidecars write both — handle both so a
+  // stale sidecar still renders.
+  const byChapter = bucketPhrasesByChapter(phrases, chapters);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {chapters.map((c, i) => {
+        const focused = i === focusedIdx;
+        const dur = (c.endMs ?? 0) - (c.atMs ?? 0);
+        const category = formatChapterCategory(c);
+        const chapterPhrases = byChapter[i] ?? [];
+        const modeTally = tallyPhraseModes(chapterPhrases);
+        return (
+          <button
+            key={c.id ?? i}
+            onClick={() => onFocus?.(i)}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '36px 1fr auto',
+              alignItems: 'center', gap: 12,
+              padding: '10px 12px',
+              borderRadius: 6,
+              border: '1px solid',
+              borderColor: focused ? 'var(--accent)' : 'var(--border)',
+              background: focused ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))' : 'var(--surface-2)',
+              color: 'var(--text)',
+              cursor: 'pointer', textAlign: 'left',
+              fontFamily: 'inherit',
+            }}
+          >
+            <div style={{
+              fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
+              fontFamily: 'var(--font-mono)',
+              letterSpacing: '0.04em',
+            }}>
+              {String(i + 1).padStart(2, '0')}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{
+                fontSize: 13, fontWeight: 600,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                {c.name || `Chapter ${i + 1}`}
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                marginTop: 3, fontSize: 11, color: 'var(--text-muted)',
+                flexWrap: 'wrap',
+              }}>
+                {category && (
+                  <span style={{
+                    fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em',
+                    padding: '2px 6px', borderRadius: 3,
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-dim)',
+                  }}>
+                    {category}
+                  </span>
+                )}
+                <span>{formatDuration(dur)}</span>
+                <span style={{ color: 'var(--text-dim)' }}>·</span>
+                <span>
+                  {chapterPhrases.length
+                    ? `${chapterPhrases.length} phrase${chapterPhrases.length === 1 ? '' : 's'}`
+                    : 'no phrases'}
+                </span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {modeTally.slice(0, 3).map((m) => (
+                <span
+                  key={m.label}
+                  title={`${m.label} × ${m.count}`}
+                  style={{
+                    fontSize: 10, fontWeight: 700,
+                    padding: '3px 7px', borderRadius: 999,
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-muted)',
+                    fontFamily: 'var(--font-mono)',
+                    letterSpacing: '0.02em',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {m.label.toUpperCase()}·{m.count}
+                </span>
+              ))}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function bucketPhrasesByChapter(phrases, chapters) {
+  const out = {};
+  const idToIdx = new Map();
+  chapters.forEach((c, i) => { if (c.id != null) idToIdx.set(c.id, i); });
+  for (const p of phrases) {
+    let idx = -1;
+    if (p.chapter_id != null && idToIdx.has(p.chapter_id)) {
+      idx = idToIdx.get(p.chapter_id);
+    } else if (typeof p.chapter_idx === 'number') {
+      idx = p.chapter_idx;
+    } else {
+      // Last resort: time-bin by midpoint into chapter ranges. Slow
+      // for big phrase counts but correct without sidecar metadata.
+      const mid = ((p.at_ms ?? 0) + (p.end_ms ?? 0)) / 2;
+      idx = chapters.findIndex((c) => mid >= (c.atMs ?? 0) && mid < (c.endMs ?? Infinity));
+    }
+    if (idx < 0) continue;
+    if (!out[idx]) out[idx] = [];
+    out[idx].push(p);
+  }
+  return out;
+}
+
+function tallyPhraseModes(phrases) {
+  const counts = {};
+  for (const p of phrases) {
+    const label = p.label || p.mode || 'unknown';
+    counts[label] = (counts[label] || 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return '0s';
+  const totalSec = Math.round(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+}
+
+// ─── Phrases category body ────────────────────────────────────────
+// Whole-track view of phrase modes. The Structure tab already breaks
+// modes down by chapter; this tab answers the cross-cutting question:
+// "what does the whole track *sound like* in aggregate?" Renders:
+//
+//   1. headline counts (total phrases · median duration)
+//   2. mode distribution as a horizontal stacked bar (each mode = a
+//      colored segment whose width is proportional to its count)
+//   3. legend showing each mode with count + %, in stacked-bar order
+//
+// Modes are listed in PHRASE_MODE_COLORS order (calm → driving) so the
+// stacked bar reads as a coherent gradient when modes naturally cluster.
+function PhrasesCategoryBody({ data }) {
+  const phrases = data?.phrases ?? [];
+  if (!phrases.length) {
+    return <EmptyCard height={120} message="No phrases sidecar yet — run analysis first." icon="list" />;
+  }
+
+  const total = phrases.length;
+  const tally = tallyPhraseModes(phrases);
+  // Order the tally by the palette order so the stacked bar's colors
+  // flow calm → driving rather than by frequency. Unknown modes
+  // (anything outside the palette) append at the end in alpha order.
+  const paletteOrder = Object.keys(PHRASE_MODE_COLORS);
+  const ordered = [
+    ...paletteOrder
+      .map((label) => tally.find((t) => t.label === label))
+      .filter(Boolean),
+    ...tally.filter((t) => !paletteOrder.includes(t.label))
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  ];
+
+  // Median phrase duration — a useful "shape" stat. Mean is skewed by
+  // outliers (a single 4-minute steady section) so median is honest.
+  const durations = phrases
+    .map((p) => (p.end_ms ?? 0) - (p.at_ms ?? 0))
+    .filter((d) => d > 0)
+    .sort((a, b) => a - b);
+  const medianMs = durations.length ? durations[Math.floor(durations.length / 2)] : 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 18, alignItems: 'baseline', fontSize: 12, color: 'var(--text-muted)' }}>
+        <span><strong style={{ color: 'var(--text)' }}>{total}</strong> phrases</span>
+        <span>median duration <strong style={{ color: 'var(--text)' }}>{formatDuration(medianMs)}</strong></span>
+        <span>{ordered.length} mode{ordered.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <div style={{
+        display: 'flex', height: 24, borderRadius: 6, overflow: 'hidden',
+        border: '1px solid var(--border)',
+      }}>
+        {ordered.map((m) => (
+          <div
+            key={m.label}
+            title={`${m.label} · ${m.count} (${Math.round((m.count / total) * 100)}%)`}
+            style={{
+              flex: m.count,
+              background: phraseModeColor(m.label),
+            }}
+          />
+        ))}
+      </div>
+
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+        gap: 8,
+      }}>
+        {ordered.map((m) => (
+          <div
+            key={m.label}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 10px', borderRadius: 6,
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            <span style={{
+              width: 12, height: 12, borderRadius: 3,
+              background: phraseModeColor(m.label), flexShrink: 0,
+            }} />
+            <span style={{
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
+              color: 'var(--text)', fontFamily: 'var(--font-mono)',
+              textTransform: 'uppercase',
+            }}>
+              {m.label}
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
+              {m.count}
+              <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>
+                {Math.round((m.count / total) * 100)}%
+              </span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Beats category body ──────────────────────────────────────────
+// Beat-grid stability. The headline visualization (BeatStrengthBars)
+// already shows *where* the beats are; this drilldown answers "how
+// stable is the grid?" — useful for spotting tempo drift, missing
+// beats, or a beat tracker that lost the pulse mid-track.
+//
+// Metrics:
+//   • BPM (from sidecar) + computed BPM from median IOI as a sanity check
+//   • Regularity = 1 − (IOI std-dev / median IOI), clamped 0-100%
+//   • Downbeats per bar = mean spacing between consecutive downbeats,
+//     divided by median beat IOI — usually 3, 4, or 6
+function BeatsCategoryBody({ data }) {
+  const trackBeats = data?.trackBeats;
+  const beats = trackBeats?.beatsMs;
+  const downbeats = trackBeats?.downbeatsMs;
+  if (!beats?.length) {
+    return <EmptyCard height={120} message="No beat sidecar yet — run analysis first." icon="activity" />;
+  }
+
+  const iois = [];
+  for (let i = 1; i < beats.length; i++) iois.push(beats[i] - beats[i - 1]);
+  const sortedIois = [...iois].sort((a, b) => a - b);
+  const medianIoi = sortedIois[Math.floor(sortedIois.length / 2)] || 0;
+  const meanIoi = iois.length ? iois.reduce((s, x) => s + x, 0) / iois.length : 0;
+  const variance = iois.length
+    ? iois.reduce((s, x) => s + (x - meanIoi) ** 2, 0) / iois.length
+    : 0;
+  const stdIoi = Math.sqrt(variance);
+  const computedBpm = medianIoi > 0 ? Math.round((60_000 / medianIoi) * 10) / 10 : null;
+  const regularity = medianIoi > 0
+    ? Math.max(0, Math.min(100, Math.round((1 - stdIoi / medianIoi) * 100)))
+    : 0;
+
+  // Downbeat spacing — how many beats per bar?
+  let beatsPerBar = null;
+  if (downbeats?.length >= 2 && medianIoi > 0) {
+    const dbGaps = [];
+    for (let i = 1; i < downbeats.length; i++) dbGaps.push(downbeats[i] - downbeats[i - 1]);
+    const medDb = [...dbGaps].sort((a, b) => a - b)[Math.floor(dbGaps.length / 2)];
+    beatsPerBar = Math.round(medDb / medianIoi);
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8,
+      }}>
+        <StatTile label="BPM (sidecar)" value={trackBeats.bpm != null
+            ? `${Math.round(trackBeats.bpm * 10) / 10}` : '—'} />
+        <StatTile label="BPM (from IOI)" value={computedBpm != null ? `${computedBpm}` : '—'} />
+        <StatTile label="Regularity" value={`${regularity}%`}
+                  subtitle={`σ ${Math.round(stdIoi)}ms`} />
+        <StatTile label="Beats / bar" value={beatsPerBar != null ? `${beatsPerBar}` : '—'}
+                  subtitle={downbeats?.length ? `${downbeats.length} downbeats` : 'no downbeats'} />
+      </div>
+
+      <IoiHistogram iois={iois} medianIoi={medianIoi} stdIoi={stdIoi} />
+    </div>
+  );
+}
+
+// Compact stat tile reused across the beats / energy / pitch tabs.
+// Visually quieter than the top-level KpiCell so the drilldown tabs
+// don't compete with the KPI strip above.
+function StatTile({ label, value, subtitle }) {
+  return (
+    <div style={{
+      padding: '10px 12px', borderRadius: 6,
+      background: 'var(--surface-2)', border: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', gap: 2,
+    }}>
+      <div style={{
+        fontSize: 10, fontWeight: 700, color: 'var(--text-dim)',
+        textTransform: 'uppercase', letterSpacing: '0.08em',
+      }}>{label}</div>
+      <div style={{
+        fontSize: 17, fontWeight: 700, color: 'var(--text)',
+        fontFamily: 'var(--font-mono)', letterSpacing: '-0.01em',
+      }}>{value}</div>
+      {subtitle && (
+        <div style={{ fontSize: 10.5, color: 'var(--text-dim)' }}>{subtitle}</div>
+      )}
+    </div>
+  );
+}
+
+// Inter-onset-interval histogram. A perfectly regular grid renders as
+// a single tall bar at the median; tempo drift smears it; a tracker
+// that drops every other beat shows two peaks (1× and 2× the median).
+function IoiHistogram({ iois, medianIoi, stdIoi }) {
+  if (!iois.length) return null;
+  // 20 buckets centred on the median, spanning ±3σ (or ±25% if σ is tiny).
+  const spread = Math.max(stdIoi * 3, medianIoi * 0.25, 1);
+  const lo = Math.max(0, medianIoi - spread);
+  const hi = medianIoi + spread;
+  const nBuckets = 20;
+  const buckets = new Uint32Array(nBuckets);
+  for (const ioi of iois) {
+    const t = (ioi - lo) / (hi - lo);
+    if (t < 0 || t > 1) continue;
+    const i = Math.min(nBuckets - 1, Math.floor(t * nBuckets));
+    buckets[i]++;
+  }
+  const peak = Math.max(1, ...buckets);
+
+  return (
+    <div>
+      <div style={{
+        fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+        marginBottom: 6,
+      }}>
+        IOI distribution · {Math.round(lo)}–{Math.round(hi)}ms
+      </div>
+      <div style={{
+        display: 'flex', alignItems: 'flex-end', gap: 2,
+        height: 64, padding: '6px 8px',
+        borderRadius: 6,
+        background: 'var(--bg)', border: '1px solid var(--border)',
+      }}>
+        {Array.from(buckets).map((count, i) => {
+          // Mark the median bucket — gives the eye an anchor point.
+          const midBucket = Math.floor(((medianIoi - lo) / (hi - lo)) * nBuckets);
+          const isMid = i === midBucket;
+          return (
+            <div
+              key={i}
+              title={`${count} IOI${count === 1 ? '' : 's'}`}
+              style={{
+                flex: 1,
+                height: `${(count / peak) * 100}%`,
+                background: isMid
+                  ? 'rgba(86, 184, 224, 0.95)'
+                  : 'rgba(255, 255, 255, 0.28)',
+                borderRadius: 1,
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Energy category body ─────────────────────────────────────────
+// Per-chapter mean intensity, sorted descending so the eye lands on
+// the loudest sections first. The headline EnergyHeatRibbon already
+// shows energies in chapter order; this drilldown re-sorts by score
+// so "which is the most energetic chapter?" is one glance away.
+function EnergyCategoryBody({ data }) {
+  const chapters = data?.chapters ?? [];
+  const spectrogram = data?.trackSpectrogram;
+  const durationMs = data?.durationMs;
+
+  if (!chapters.length) {
+    return <EmptyCard height={120} message="No chapters yet." icon="zap" />;
+  }
+  if (!spectrogram?.cells?.length || !spectrogram.hopMs) {
+    return <EmptyCard height={120} message="No spectrogram yet — run analysis first." icon="zap" />;
+  }
+
+  const energies = perChapterEnergyFromSpectrogram(chapters, spectrogram, durationMs);
+  // Index alongside the value so we can show "Chapter N" after sort.
+  const ranked = energies
+    .map((e, i) => ({ idx: i, energy: e, chapter: chapters[i] }))
+    .sort((a, b) => b.energy - a.energy);
+
+  const lo = Math.min(...energies);
+  const hi = Math.max(...energies);
+  const span = Math.max(0.05, hi - lo);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {ranked.map((row, rank) => {
+        const t = (row.energy - lo) / span;
+        const color = interpolateColorStops(VELOCITY_COLOR_STOPS, Math.min(1, Math.max(0, t)));
+        const dur = (row.chapter.endMs ?? 0) - (row.chapter.atMs ?? 0);
+        return (
+          <div
+            key={row.chapter.id ?? row.idx}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '24px 1fr 90px 60px',
+              alignItems: 'center', gap: 10,
+              padding: '6px 10px',
+              borderRadius: 4,
+              background: rank === 0 ? 'color-mix(in srgb, var(--accent) 8%, var(--surface-2))' : 'var(--surface-2)',
+              border: '1px solid var(--border)',
+              fontSize: 12, color: 'var(--text)',
+            }}
+          >
+            <span style={{
+              fontSize: 10.5, fontWeight: 700,
+              color: 'var(--text-dim)', fontFamily: 'var(--font-mono)',
+            }}>
+              {String(row.idx + 1).padStart(2, '0')}
+            </span>
+            <span style={{
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              {row.chapter.name || `Chapter ${row.idx + 1}`}
+            </span>
+            <div style={{
+              height: 10, borderRadius: 2, overflow: 'hidden',
+              background: 'var(--bg)', border: '1px solid var(--border)',
+            }}>
+              <div style={{
+                width: `${Math.min(100, Math.max(2, t * 100))}%`,
+                height: '100%', background: color,
+              }} />
+            </div>
+            <span style={{
+              fontSize: 11, color: 'var(--text-muted)',
+              fontFamily: 'var(--font-mono)', textAlign: 'right',
+            }}>
+              {Math.round(row.energy * 100)} · {formatDuration(dur)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Pitch category body ──────────────────────────────────────────
+// Distribution + drift for the chosen pitch source.
+//
+// Funscript mode: histogram of `pos` values (0..100) — where does the
+//   script *sit*? Plus a simple linear-regression slope over time
+//   ("rising / falling / stable") computed against action timestamps.
+// Audio mode: mel-bin distribution from the spectrogram (collapsed
+//   across time) — "is this track bass-heavy or vocal-heavy?". Drift
+//   here = trend in spectral centroid across the run.
+function PitchCategoryBody({ data }) {
+  const actions = data?.actions ?? null;
+  const spectrogram = data?.trackSpectrogram;
+
+  // Prefer the more informative source: spectrogram > funscript.
+  // (Pitch is principally an audio question; funscript is the fallback
+  // when no media is loaded.) This matches PitchLine's preference order.
+  if (spectrogram?.cells?.length && spectrogram.nMels) {
+    return <PitchAudioBody spectrogram={spectrogram} />;
+  }
+  if (actions?.length) {
+    return <PitchFunscriptBody actions={actions} />;
+  }
+  return <EmptyCard height={120} message="No pitch source — load a funscript or analyze media." icon="trending-up" />;
+}
+
+function PitchFunscriptBody({ actions }) {
+  const positions = actions.map((a) => a.pos).filter((p) => typeof p === 'number');
+  if (!positions.length) {
+    return <EmptyCard height={120} message="No position data in funscript." icon="trending-up" />;
+  }
+
+  const sorted = [...positions].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const p10 = sorted[Math.floor(sorted.length * 0.10)];
+  const p90 = sorted[Math.floor(sorted.length * 0.90)];
+
+  // 20-bucket histogram across 0..100. Same bucket count as the IOI
+  // histogram so the two surfaces visually rhyme.
+  const nBuckets = 20;
+  const buckets = new Uint32Array(nBuckets);
+  for (const p of positions) {
+    const i = Math.min(nBuckets - 1, Math.floor((p / 100) * nBuckets));
+    buckets[i]++;
+  }
+  const peak = Math.max(1, ...buckets);
+
+  // Drift = linear regression slope of pos vs at, normalised to
+  // pos-points per minute. Positive = rising baseline, negative =
+  // falling. Threshold ±2 pts/min before calling drift "drifting" —
+  // tighter than that is noise.
+  const drift = linearSlope(actions);
+  const driftLabel = Math.abs(drift) < 2 ? 'stable'
+                    : drift > 0 ? `rising · +${drift.toFixed(1)} pts/min`
+                                : `falling · ${drift.toFixed(1)} pts/min`;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+        <StatTile label="Median pos" value={`${median}`} subtitle="0–100 scale" />
+        <StatTile label="10th pct" value={`${p10}`} subtitle="lowest 10%" />
+        <StatTile label="90th pct" value={`${p90}`} subtitle="highest 10%" />
+        <StatTile label="Drift" value={driftLabel} />
+      </div>
+
+      <div>
+        <div style={{
+          fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
+          textTransform: 'uppercase', letterSpacing: '0.06em',
+          marginBottom: 6,
+        }}>
+          Position distribution · 0 (down) → 100 (up)
+        </div>
+        <div style={{
+          display: 'flex', alignItems: 'flex-end', gap: 2,
+          height: 64, padding: '6px 8px',
+          borderRadius: 6,
+          background: 'var(--bg)', border: '1px solid var(--border)',
+        }}>
+          {Array.from(buckets).map((count, i) => {
+            const t = i / (nBuckets - 1);
+            const color = interpolateColorStops(VELOCITY_COLOR_STOPS, t);
+            return (
+              <div
+                key={i}
+                title={`${i * 5}–${(i + 1) * 5}: ${count} actions`}
+                style={{
+                  flex: 1,
+                  height: `${(count / peak) * 100}%`,
+                  background: color,
+                  opacity: 0.85,
+                  borderRadius: 1,
+                }}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PitchAudioBody({ spectrogram }) {
+  const { cells, nMels, nFrames, hopMs } = spectrogram;
+  const frames = nFrames ?? Math.floor(cells.length / nMels);
+
+  // Mel-bin distribution: sum intensity per bin across all frames.
+  const binTotals = new Float64Array(nMels);
+  for (let f = 0; f < frames; f++) {
+    const base = f * nMels;
+    for (let b = 0; b < nMels; b++) {
+      binTotals[b] += cells[base + b];
+    }
+  }
+  const peak = Math.max(1, ...binTotals);
+
+  // Centroid per frame, then linear-regression slope across time for
+  // "is the track getting brighter or darker over its run?"
+  const centroids = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) {
+    const base = f * nMels;
+    let num = 0; let den = 0;
+    for (let b = 0; b < nMels; b++) {
+      const m = cells[base + b];
+      num += b * m;
+      den += m;
+    }
+    centroids[f] = den > 1e-9 ? num / den : 0;
+  }
+  const sortedC = Array.from(centroids).sort((a, b) => a - b);
+  const medC = sortedC[Math.floor(sortedC.length / 2)] || 0;
+
+  // Slope = mel-bins per minute. nMels typically 64, so ~0.5 bins/min
+  // is a perceptible drift across a 10-min track.
+  const slopeBinsPerFrame = linearSlopeArray(centroids);
+  const slopeBinsPerMin = slopeBinsPerFrame * (60_000 / hopMs);
+  const driftLabel = Math.abs(slopeBinsPerMin) < 0.5 ? 'stable'
+                    : slopeBinsPerMin > 0 ? `brightening · +${slopeBinsPerMin.toFixed(2)} bins/min`
+                                          : `darkening · ${slopeBinsPerMin.toFixed(2)} bins/min`;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        <StatTile label="Median centroid" value={`${medC.toFixed(1)}`}
+                  subtitle={`bin · 0–${nMels - 1}`} />
+        <StatTile label="Drift" value={driftLabel} />
+        <StatTile label="Frames" value={`${frames}`}
+                  subtitle={`hop ${hopMs}ms`} />
+      </div>
+
+      <div>
+        <div style={{
+          fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
+          textTransform: 'uppercase', letterSpacing: '0.06em',
+          marginBottom: 6,
+        }}>
+          Mel bin energy · 0 (bass) → {nMels - 1} (treble)
+        </div>
+        <div style={{
+          display: 'flex', alignItems: 'flex-end', gap: 1,
+          height: 64, padding: '6px 8px',
+          borderRadius: 6,
+          background: 'var(--bg)', border: '1px solid var(--border)',
+        }}>
+          {Array.from(binTotals).map((v, b) => {
+            const t = b / (nMels - 1);
+            const color = interpolateColorStops(VELOCITY_COLOR_STOPS, t);
+            return (
+              <div
+                key={b}
+                title={`bin ${b}: ${v.toFixed(0)}`}
+                style={{
+                  flex: 1,
+                  height: `${(v / peak) * 100}%`,
+                  background: color,
+                  opacity: 0.85,
+                }}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Linear regression slope of pos vs at across actions. Returns
+// pos-points per minute. Closed-form OLS so it's O(n) and exact.
+function linearSlope(actions) {
+  const n = actions.length;
+  if (n < 2) return 0;
+  let sx = 0; let sy = 0; let sxx = 0; let sxy = 0;
+  for (const a of actions) {
+    const x = a.at;
+    const y = a.pos;
+    sx += x; sy += y; sxx += x * x; sxy += x * y;
+  }
+  const denom = n * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-9) return 0;
+  const slopePerMs = (n * sxy - sx * sy) / denom;
+  return slopePerMs * 60_000; // per-ms → per-minute
+}
+
+// OLS slope for an unindexed numeric array (x = index). Used for the
+// spectral-centroid drift over frames.
+function linearSlopeArray(arr) {
+  const n = arr.length;
+  if (n < 2) return 0;
+  let sx = 0; let sy = 0; let sxx = 0; let sxy = 0;
+  for (let i = 0; i < n; i++) {
+    sx += i; sy += arr[i]; sxx += i * i; sxy += i * arr[i];
+  }
+  const denom = n * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-9) return 0;
+  return (n * sxy - sx * sy) / denom;
 }
 
 function CategoryTabs({ activeId, onChange }) {

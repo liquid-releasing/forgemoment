@@ -113,6 +113,7 @@ export {
   ChapterStripPanel,
   ScriptOverviewRow,
   PitchLine,
+  TempoMap,
   BeatStrengthBars,
   EnergyHeatRibbon,
   KpiStrip,

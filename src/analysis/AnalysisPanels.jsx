@@ -1369,7 +1369,11 @@ function StructureCategoryBody({ data }) {
   const byChapter = bucketPhrasesByChapter(phrases, chapters);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+      gap: 8,
+    }}>
       {chapters.map((c, i) => {
         const focused = i === focusedIdx;
         const dur = (c.endMs ?? 0) - (c.atMs ?? 0);
@@ -1381,9 +1385,7 @@ function StructureCategoryBody({ data }) {
             key={c.id ?? i}
             onClick={() => onFocus?.(i)}
             style={{
-              display: 'grid',
-              gridTemplateColumns: '36px 1fr auto',
-              alignItems: 'center', gap: 12,
+              display: 'flex', flexDirection: 'column', gap: 6,
               padding: '10px 12px',
               borderRadius: 6,
               border: '1px solid',
@@ -1392,67 +1394,76 @@ function StructureCategoryBody({ data }) {
               color: 'var(--text)',
               cursor: 'pointer', textAlign: 'left',
               fontFamily: 'inherit',
+              minHeight: 96,
             }}
           >
             <div style={{
-              fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
-              fontFamily: 'var(--font-mono)',
-              letterSpacing: '0.04em',
+              display: 'flex', alignItems: 'baseline', gap: 8,
+              justifyContent: 'space-between',
             }}>
-              {String(i + 1).padStart(2, '0')}
+              <span style={{
+                fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
+                fontFamily: 'var(--font-mono)',
+                letterSpacing: '0.04em',
+              }}>
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              {category && (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.06em',
+                  padding: '2px 5px', borderRadius: 3,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-dim)',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {category}
+                </span>
+              )}
             </div>
-            <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: 13, fontWeight: 600,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              {c.name || `Chapter ${i + 1}`}
+            </div>
+            <div style={{
+              fontSize: 10.5, color: 'var(--text-muted)',
+              display: 'flex', gap: 6, alignItems: 'center',
+            }}>
+              <span>{formatDuration(dur)}</span>
+              <span style={{ color: 'var(--text-dim)' }}>·</span>
+              <span>
+                {chapterPhrases.length
+                  ? `${chapterPhrases.length} phrase${chapterPhrases.length === 1 ? '' : 's'}`
+                  : 'no phrases'}
+              </span>
+            </div>
+            {modeTally.length > 0 && (
               <div style={{
-                fontSize: 13, fontWeight: 600,
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                display: 'flex', gap: 3, flexWrap: 'wrap',
+                marginTop: 'auto',
               }}>
-                {c.name || `Chapter ${i + 1}`}
-              </div>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                marginTop: 3, fontSize: 11, color: 'var(--text-muted)',
-                flexWrap: 'wrap',
-              }}>
-                {category && (
-                  <span style={{
-                    fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em',
-                    padding: '2px 6px', borderRadius: 3,
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text-dim)',
-                  }}>
-                    {category}
+                {modeTally.slice(0, 3).map((m) => (
+                  <span
+                    key={m.label}
+                    title={`${m.label} × ${m.count}`}
+                    style={{
+                      fontSize: 9.5, fontWeight: 700,
+                      padding: '2px 6px', borderRadius: 999,
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-muted)',
+                      fontFamily: 'var(--font-mono)',
+                      letterSpacing: '0.02em',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {m.label.toUpperCase()}·{m.count}
                   </span>
-                )}
-                <span>{formatDuration(dur)}</span>
-                <span style={{ color: 'var(--text-dim)' }}>·</span>
-                <span>
-                  {chapterPhrases.length
-                    ? `${chapterPhrases.length} phrase${chapterPhrases.length === 1 ? '' : 's'}`
-                    : 'no phrases'}
-                </span>
+                ))}
               </div>
-            </div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {modeTally.slice(0, 3).map((m) => (
-                <span
-                  key={m.label}
-                  title={`${m.label} × ${m.count}`}
-                  style={{
-                    fontSize: 10, fontWeight: 700,
-                    padding: '3px 7px', borderRadius: 999,
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text-muted)',
-                    fontFamily: 'var(--font-mono)',
-                    letterSpacing: '0.02em',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {m.label.toUpperCase()}·{m.count}
-                </span>
-              ))}
-            </div>
+            )}
           </button>
         );
       })}
@@ -1503,104 +1514,180 @@ function formatDuration(ms) {
 }
 
 // ─── Phrases category body ────────────────────────────────────────
-// Whole-track view of phrase modes. The Structure tab already breaks
-// modes down by chapter; this tab answers the cross-cutting question:
-// "what does the whole track *sound like* in aggregate?" Renders:
+// Per-chapter phrase-mode breakdown laid out chronologically. Each
+// card shows one chapter's mode distribution as a mini stacked bar.
+// A whole-track strip at the top gives the aggregate view; cards
+// below answer "and how does that distribution shift chapter to
+// chapter?" — the editing question the tab exists to surface.
 //
-//   1. headline counts (total phrases · median duration)
-//   2. mode distribution as a horizontal stacked bar (each mode = a
-//      colored segment whose width is proportional to its count)
-//   3. legend showing each mode with count + %, in stacked-bar order
-//
-// Modes are listed in PHRASE_MODE_COLORS order (calm → driving) so the
-// stacked bar reads as a coherent gradient when modes naturally cluster.
+// Modes are listed in PHRASE_MODE_COLORS order (calm → driving) so
+// the stacked bars read as a coherent gradient when modes cluster.
 function PhrasesCategoryBody({ data }) {
   const phrases = data?.phrases ?? [];
+  const chapters = data?.chapters ?? [];
+  const focusedIdx = data?.focusedIdx;
+  const onFocus = data?.onFocus;
+
   if (!phrases.length) {
     return <EmptyCard height={120} message="No phrases sidecar yet — run analysis first." icon="list" />;
   }
 
   const total = phrases.length;
-  const tally = tallyPhraseModes(phrases);
-  // Order the tally by the palette order so the stacked bar's colors
-  // flow calm → driving rather than by frequency. Unknown modes
-  // (anything outside the palette) append at the end in alpha order.
+  const allTally = tallyPhraseModes(phrases);
   const paletteOrder = Object.keys(PHRASE_MODE_COLORS);
-  const ordered = [
+  const orderModes = (tally) => [
     ...paletteOrder
       .map((label) => tally.find((t) => t.label === label))
       .filter(Boolean),
     ...tally.filter((t) => !paletteOrder.includes(t.label))
       .sort((a, b) => a.label.localeCompare(b.label)),
   ];
+  const orderedAll = orderModes(allTally);
 
-  // Median phrase duration — a useful "shape" stat. Mean is skewed by
-  // outliers (a single 4-minute steady section) so median is honest.
   const durations = phrases
     .map((p) => (p.end_ms ?? 0) - (p.at_ms ?? 0))
     .filter((d) => d > 0)
     .sort((a, b) => a - b);
   const medianMs = durations.length ? durations[Math.floor(durations.length / 2)] : 0;
 
+  const byChapter = chapters.length ? bucketPhrasesByChapter(phrases, chapters) : {};
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', gap: 18, alignItems: 'baseline', fontSize: 12, color: 'var(--text-muted)' }}>
         <span><strong style={{ color: 'var(--text)' }}>{total}</strong> phrases</span>
         <span>median duration <strong style={{ color: 'var(--text)' }}>{formatDuration(medianMs)}</strong></span>
-        <span>{ordered.length} mode{ordered.length === 1 ? '' : 's'}</span>
+        <span>{orderedAll.length} mode{orderedAll.length === 1 ? '' : 's'}</span>
       </div>
 
-      <div style={{
-        display: 'flex', height: 24, borderRadius: 6, overflow: 'hidden',
-        border: '1px solid var(--border)',
-      }}>
-        {ordered.map((m) => (
-          <div
-            key={m.label}
-            title={`${m.label} · ${m.count} (${Math.round((m.count / total) * 100)}%)`}
-            style={{
-              flex: m.count,
-              background: phraseModeColor(m.label),
-            }}
-          />
-        ))}
-      </div>
-
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-        gap: 8,
-      }}>
-        {ordered.map((m) => (
-          <div
-            key={m.label}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '8px 10px', borderRadius: 6,
-              background: 'var(--surface-2)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            <span style={{
-              width: 12, height: 12, borderRadius: 3,
-              background: phraseModeColor(m.label), flexShrink: 0,
-            }} />
-            <span style={{
-              fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
-              color: 'var(--text)', fontFamily: 'var(--font-mono)',
-              textTransform: 'uppercase',
-            }}>
-              {m.label}
-            </span>
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
-              {m.count}
-              <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>
-                {Math.round((m.count / total) * 100)}%
+      <div>
+        <div style={{
+          fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
+          textTransform: 'uppercase', letterSpacing: '0.06em',
+          marginBottom: 6,
+        }}>
+          Whole track · all phrases
+        </div>
+        <div style={{
+          display: 'flex', height: 16, borderRadius: 4, overflow: 'hidden',
+          border: '1px solid var(--border)',
+        }}>
+          {orderedAll.map((m) => (
+            <div
+              key={m.label}
+              title={`${m.label} · ${m.count} (${Math.round((m.count / total) * 100)}%)`}
+              style={{ flex: m.count, background: phraseModeColor(m.label) }}
+            />
+          ))}
+        </div>
+        <div style={{
+          display: 'flex', gap: 10, flexWrap: 'wrap',
+          marginTop: 6, fontSize: 10.5, color: 'var(--text-muted)',
+        }}>
+          {orderedAll.map((m) => (
+            <span key={m.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: 2,
+                background: phraseModeColor(m.label),
+              }} />
+              <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '0.02em' }}>
+                {m.label.toUpperCase()}
               </span>
+              <span style={{ color: 'var(--text-dim)' }}>{m.count}</span>
             </span>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
+
+      {chapters.length > 0 && (
+        <div>
+          <div style={{
+            fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
+            textTransform: 'uppercase', letterSpacing: '0.06em',
+            marginBottom: 6,
+          }}>
+            Per chapter · chronological
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+            gap: 8,
+          }}>
+            {chapters.map((c, i) => {
+              const focused = i === focusedIdx;
+              const chPhrases = byChapter[i] ?? [];
+              const chOrdered = orderModes(tallyPhraseModes(chPhrases));
+              const chTotal = chPhrases.length;
+              return (
+                <button
+                  key={c.id ?? i}
+                  onClick={() => onFocus?.(i)}
+                  style={{
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                    padding: '10px 12px',
+                    borderRadius: 6,
+                    border: '1px solid',
+                    borderColor: focused ? 'var(--accent)' : 'var(--border)',
+                    background: focused ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))' : 'var(--surface-2)',
+                    color: 'var(--text)',
+                    cursor: 'pointer', textAlign: 'left',
+                    fontFamily: 'inherit',
+                    minHeight: 84,
+                  }}
+                >
+                  <div style={{
+                    display: 'flex', alignItems: 'baseline',
+                    justifyContent: 'space-between', gap: 8,
+                  }}>
+                    <span style={{
+                      fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
+                      fontFamily: 'var(--font-mono)', letterSpacing: '0.04em',
+                    }}>
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
+                    <span style={{
+                      fontSize: 10.5, color: 'var(--text-muted)',
+                      fontFamily: 'var(--font-mono)',
+                    }}>
+                      {chTotal} phrase{chTotal === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div style={{
+                    fontSize: 12, fontWeight: 600,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {c.name || `Chapter ${i + 1}`}
+                  </div>
+                  {chTotal === 0 ? (
+                    <div style={{
+                      height: 12, borderRadius: 3,
+                      border: '1px dashed var(--border)',
+                      marginTop: 'auto',
+                    }} />
+                  ) : (
+                    <div style={{
+                      display: 'flex', height: 12, borderRadius: 3,
+                      overflow: 'hidden', border: '1px solid var(--border)',
+                      marginTop: 'auto',
+                    }}>
+                      {chOrdered.map((m) => (
+                        <div
+                          key={m.label}
+                          title={`${m.label} · ${m.count}`}
+                          style={{
+                            flex: m.count,
+                            background: phraseModeColor(m.label),
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1750,14 +1837,18 @@ function IoiHistogram({ iois, medianIoi, stdIoi }) {
 }
 
 // ─── Energy category body ─────────────────────────────────────────
-// Per-chapter mean intensity, sorted descending so the eye lands on
-// the loudest sections first. The headline EnergyHeatRibbon already
-// shows energies in chapter order; this drilldown re-sorts by score
-// so "which is the most energetic chapter?" is one glance away.
+// Per-chapter mean intensity laid out as a wrapping grid of cards.
+// Default order is chronological (matches Structure / Phrases), and
+// a small toggle re-orders by energy descending to answer "which
+// chapter is loudest?" — both views are useful, neither is the
+// single canonical reading.
 function EnergyCategoryBody({ data }) {
   const chapters = data?.chapters ?? [];
   const spectrogram = data?.trackSpectrogram;
   const durationMs = data?.durationMs;
+  const focusedIdx = data?.focusedIdx;
+  const onFocus = data?.onFocus;
+  const [sortMode, setSortMode] = useState('chronological');
 
   if (!chapters.length) {
     return <EmptyCard height={120} message="No chapters yet." icon="zap" />;
@@ -1767,62 +1858,137 @@ function EnergyCategoryBody({ data }) {
   }
 
   const energies = perChapterEnergyFromSpectrogram(chapters, spectrogram, durationMs);
-  // Index alongside the value so we can show "Chapter N" after sort.
-  const ranked = energies
-    .map((e, i) => ({ idx: i, energy: e, chapter: chapters[i] }))
-    .sort((a, b) => b.energy - a.energy);
+  const rows = energies.map((e, i) => ({ idx: i, energy: e, chapter: chapters[i] }));
+  const ordered = sortMode === 'energy'
+    ? [...rows].sort((a, b) => b.energy - a.energy)
+    : rows;
 
   const lo = Math.min(...energies);
   const hi = Math.max(...energies);
   const span = Math.max(0.05, hi - lo);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {ranked.map((row, rank) => {
-        const t = (row.energy - lo) / span;
-        const color = interpolateColorStops(VELOCITY_COLOR_STOPS, Math.min(1, Math.max(0, t)));
-        const dur = (row.chapter.endMs ?? 0) - (row.chapter.atMs ?? 0);
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <SortToggle
+        value={sortMode}
+        onChange={setSortMode}
+        options={[
+          { id: 'chronological', label: 'First → last' },
+          { id: 'energy',        label: 'By energy' },
+        ]}
+      />
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+        gap: 8,
+      }}>
+        {ordered.map((row, rank) => {
+          const t = (row.energy - lo) / span;
+          const tClamped = Math.min(1, Math.max(0, t));
+          const color = interpolateColorStops(VELOCITY_COLOR_STOPS, tClamped);
+          const dur = (row.chapter.endMs ?? 0) - (row.chapter.atMs ?? 0);
+          const focused = row.idx === focusedIdx;
+          const isTop = sortMode === 'energy' && rank === 0;
+          return (
+            <button
+              key={row.chapter.id ?? row.idx}
+              onClick={() => onFocus?.(row.idx)}
+              style={{
+                display: 'flex', flexDirection: 'column', gap: 6,
+                padding: '10px 12px',
+                borderRadius: 6,
+                border: '1px solid',
+                borderColor: focused ? 'var(--accent)' : 'var(--border)',
+                background: focused
+                  ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))'
+                  : isTop
+                    ? 'color-mix(in srgb, var(--accent) 6%, var(--surface-2))'
+                    : 'var(--surface-2)',
+                color: 'var(--text)',
+                cursor: 'pointer', textAlign: 'left',
+                fontFamily: 'inherit',
+                minHeight: 88,
+              }}
+            >
+              <div style={{
+                display: 'flex', alignItems: 'baseline',
+                justifyContent: 'space-between', gap: 8,
+              }}>
+                <span style={{
+                  fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
+                  fontFamily: 'var(--font-mono)', letterSpacing: '0.04em',
+                }}>
+                  {String(row.idx + 1).padStart(2, '0')}
+                </span>
+                <span style={{
+                  fontSize: 11, fontWeight: 700, color: 'var(--text)',
+                  fontFamily: 'var(--font-mono)',
+                }}>
+                  {Math.round(row.energy * 100)}
+                </span>
+              </div>
+              <div style={{
+                fontSize: 12, fontWeight: 600,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                {row.chapter.name || `Chapter ${row.idx + 1}`}
+              </div>
+              <div style={{
+                height: 10, borderRadius: 2, overflow: 'hidden',
+                background: 'var(--bg)', border: '1px solid var(--border)',
+                marginTop: 'auto',
+              }}>
+                <div style={{
+                  width: `${Math.max(2, tClamped * 100)}%`,
+                  height: '100%', background: color,
+                }} />
+              </div>
+              <div style={{
+                fontSize: 10.5, color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+              }}>
+                {formatDuration(dur)}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Small segmented control used by the Energy sub-tab (and reusable
+// elsewhere). Active option gets the accent border; inactive options
+// stay quiet. Sized to sit comfortably under the sub-tab headline.
+function SortToggle({ value, onChange, options }) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignSelf: 'flex-start',
+      borderRadius: 6, overflow: 'hidden',
+      border: '1px solid var(--border)',
+      background: 'var(--surface-2)',
+    }}>
+      {options.map((o, i) => {
+        const active = o.id === value;
+        const isLast = i === options.length - 1;
         return (
-          <div
-            key={row.chapter.id ?? row.idx}
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
             style={{
-              display: 'grid',
-              gridTemplateColumns: '24px 1fr 90px 60px',
-              alignItems: 'center', gap: 10,
-              padding: '6px 10px',
-              borderRadius: 4,
-              background: rank === 0 ? 'color-mix(in srgb, var(--accent) 8%, var(--surface-2))' : 'var(--surface-2)',
-              border: '1px solid var(--border)',
-              fontSize: 12, color: 'var(--text)',
+              padding: '5px 10px',
+              fontSize: 11, fontWeight: 700,
+              letterSpacing: '0.04em',
+              border: 'none',
+              background: active ? 'var(--surface)' : 'transparent',
+              color: active ? 'var(--text)' : 'var(--text-muted)',
+              cursor: active ? 'default' : 'pointer',
+              fontFamily: 'inherit',
+              borderRight: isLast ? 'none' : '1px solid var(--border)',
             }}
           >
-            <span style={{
-              fontSize: 10.5, fontWeight: 700,
-              color: 'var(--text-dim)', fontFamily: 'var(--font-mono)',
-            }}>
-              {String(row.idx + 1).padStart(2, '0')}
-            </span>
-            <span style={{
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>
-              {row.chapter.name || `Chapter ${row.idx + 1}`}
-            </span>
-            <div style={{
-              height: 10, borderRadius: 2, overflow: 'hidden',
-              background: 'var(--bg)', border: '1px solid var(--border)',
-            }}>
-              <div style={{
-                width: `${Math.min(100, Math.max(2, t * 100))}%`,
-                height: '100%', background: color,
-              }} />
-            </div>
-            <span style={{
-              fontSize: 11, color: 'var(--text-muted)',
-              fontFamily: 'var(--font-mono)', textAlign: 'right',
-            }}>
-              {Math.round(row.energy * 100)} · {formatDuration(dur)}
-            </span>
-          </div>
+            {o.label}
+          </button>
         );
       })}
     </div>
@@ -1980,11 +2146,21 @@ function PitchAudioBody({ spectrogram }) {
 
       <div>
         <div style={{
-          fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
-          textTransform: 'uppercase', letterSpacing: '0.06em',
+          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
           marginBottom: 6,
         }}>
-          Mel bin energy · 0 (bass) → {nMels - 1} (treble)
+          <div style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--text-dim)',
+            textTransform: 'uppercase', letterSpacing: '0.06em',
+          }}>
+            Spectral profile · where the music's energy sits
+          </div>
+          <div style={{
+            fontSize: 10.5, color: 'var(--text-muted)',
+            fontFamily: 'var(--font-mono)',
+          }}>
+            bass <span style={{ opacity: 0.5 }}>← {nMels} bands →</span> treble
+          </div>
         </div>
         <div style={{
           display: 'flex', alignItems: 'flex-end', gap: 1,
@@ -1993,7 +2169,13 @@ function PitchAudioBody({ spectrogram }) {
           background: 'var(--bg)', border: '1px solid var(--border)',
         }}>
           {Array.from(binTotals).map((v, b) => {
-            const t = b / (nMels - 1);
+            // Color by VALUE so height and color tell the same story:
+            // loud bands burn hot, quiet bands fade cool. Previously
+            // colored by bin INDEX (a decorative bass→treble gradient)
+            // which fought the height encoding — user-confusing per
+            // 2026-05-25 dogfood ("bass on left with 0 as the highest
+            // blue value? confused.").
+            const t = v / peak;
             const color = interpolateColorStops(VELOCITY_COLOR_STOPS, t);
             return (
               <div
@@ -2001,9 +2183,9 @@ function PitchAudioBody({ spectrogram }) {
                 title={`bin ${b}: ${v.toFixed(0)}`}
                 style={{
                   flex: 1,
-                  height: `${(v / peak) * 100}%`,
+                  height: `${Math.max(2, t * 100)}%`,
                   background: color,
-                  opacity: 0.85,
+                  opacity: 0.9,
                 }}
               />
             );

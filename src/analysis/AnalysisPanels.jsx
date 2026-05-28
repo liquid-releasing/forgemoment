@@ -1256,19 +1256,25 @@ function KpiCell({ kpi, status }) {
 // category renderers land alongside the analyze hookup.
 export const ANALYSIS_CATEGORIES = [
   { id: 'structure', label: 'Structure', icon: 'layers',
-    headline: 'Chapters and phrases',
-    desc:     'How the track breaks into natural sections, and the modes inside each.' },
+    headline: 'Chapters at a glance',
+    desc:     'Time + phrases + beats + stanzas + actions per chapter. Variance reads at a glance.' },
   { id: 'beats',     label: 'Beats',     icon: 'activity',
     headline: 'Beat grid stability',
-    desc:     'PLP-detected beats with downbeat markers.' },
+    desc:     'PLP-detected beats with downbeat markers + per-chapter BPM.' },
+  // Stanzas (carved out 2026-05-28) — videoflow's rhythmic-units classifier
+  // (modes tease/steady/edging/break). Was mislabeled as "Phrases" until
+  // the rename — phrases now means FF's editing-phrases (see next entry).
+  { id: 'stanzas',   label: 'Stanzas',   icon: 'activity',
+    headline: 'Stanza modes',
+    desc:     'Rhythmic units classified — tease / steady / edging / break.' },
+  // Phrases (carved out 2026-05-28) — FF cmd_assess editing units with
+  // Step 2 evidence: top_drift / bottom_drift / density_drift / drone_grid.
   { id: 'phrases',   label: 'Phrases',   icon: 'list',
-    headline: 'Phrase modes',
-    desc:     'Each phrase classified by mode — tease / steady / edging / break.' },
+    headline: 'Editing phrases',
+    desc:     'Each phrase boundary labeled with evidence — where it came from and why.' },
   { id: 'energy',    label: 'Energy',    icon: 'zap',
     headline: 'Per-chapter energy',
     desc:     'Mean + peak energy per chapter, normalised within each chapter.' },
-  // New category 2026-05-24 — distinct from the energy/heatmap pair.
-  // Pitch is continuous-shape statistics: distribution, drift, range.
   { id: 'pitch',     label: 'Pitch',     icon: 'trending-up',
     headline: 'Pitch baseline + drift',
     desc:     'Where the script\'s baseline lives and how it drifts over the run.' },
@@ -1320,6 +1326,7 @@ export function CategoryPanel({
 function CategoryBody({ categoryId, categoryLabel, data }) {
   switch (categoryId) {
     case 'structure': return <StructureCategoryBody data={data} />;
+    case 'stanzas':   return <StanzasCategoryBody data={data} />;
     case 'phrases':   return <PhrasesCategoryBody data={data} />;
     case 'beats':     return <BeatsCategoryBody data={data} />;
     case 'energy':    return <EnergyCategoryBody data={data} />;
@@ -1358,31 +1365,148 @@ function phraseModeColor(label) {
   return PHRASE_MODE_COLORS[label] || 'var(--text-dim)';
 }
 
+// ─── Shared ChapterCard + per-chapter rollups ─────────────────────
+// One reusable chapter card consumed by Structure / Stanzas / Phrases /
+// Beats sub-tabs. Each tab passes its own `stats` array (label/value
+// pairs rendered as a single dotted line) + optional `pills` (legend
+// chips beneath, e.g. stanza modes or phrase evidence).
+function ChapterCard({ chapter, index, focused, onFocus, stats = [], pills = [] }) {
+  const category = formatChapterCategory(chapter);
+  return (
+    <button
+      onClick={() => onFocus?.(index)}
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 6,
+        padding: '10px 12px',
+        borderRadius: 6,
+        border: '1px solid',
+        borderColor: focused ? 'var(--accent)' : 'var(--border)',
+        background: focused ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))' : 'var(--surface-2)',
+        color: 'var(--text)',
+        cursor: 'pointer', textAlign: 'left',
+        fontFamily: 'inherit',
+        minHeight: 96,
+      }}
+    >
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 8,
+        justifyContent: 'space-between',
+      }}>
+        <span style={{
+          fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
+          fontFamily: 'var(--font-mono)',
+          letterSpacing: '0.04em',
+        }}>
+          {String(index + 1).padStart(2, '0')}
+        </span>
+        {category && (
+          <span style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: '0.06em',
+            padding: '2px 5px', borderRadius: 3,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-dim)',
+            whiteSpace: 'nowrap',
+          }}>
+            {category}
+          </span>
+        )}
+      </div>
+      <div style={{
+        fontSize: 13, fontWeight: 600,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
+        {chapter.name || `Chapter ${index + 1}`}
+      </div>
+      {stats.length > 0 && (
+        <div style={{
+          fontSize: 10.5, color: 'var(--text-muted)',
+          display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+        }}>
+          {stats.map((s, i) => (
+            <span key={s.label} style={{ display: 'inline-flex', gap: 4 }}>
+              {i > 0 && <span style={{ color: 'var(--text-dim)' }}>·</span>}
+              <span title={s.label}>{s.value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {pills.length > 0 && (
+        <div style={{
+          display: 'flex', gap: 3, flexWrap: 'wrap',
+          marginTop: 'auto',
+        }}>
+          {pills.slice(0, 4).map((p) => (
+            <span
+              key={p.label}
+              title={p.title || `${p.label} × ${p.count}`}
+              style={{
+                fontSize: 9.5, fontWeight: 700,
+                padding: '2px 6px', borderRadius: 999,
+                background: p.color ? `color-mix(in srgb, ${p.color} 18%, var(--surface))` : 'var(--surface)',
+                border: '1px solid',
+                borderColor: p.color || 'var(--border)',
+                color: p.color || 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                letterSpacing: '0.02em',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {p.label.toUpperCase()}·{p.count}
+            </span>
+          ))}
+        </div>
+      )}
+    </button>
+  );
+}
+
+// Count items in [ch.atMs, ch.endMs). Used for beats + actions per chapter.
+function countInChapter(items, ch, getter = (x) => x) {
+  if (!Array.isArray(items) || !items.length) return 0;
+  const start = ch.atMs ?? 0;
+  const end = ch.endMs ?? 0;
+  let n = 0;
+  for (const it of items) {
+    const t = getter(it);
+    if (t >= start && t < end) n += 1;
+  }
+  return n;
+}
+
+// Per-chapter BPM from beats in window. Returns null if too few beats
+// to be meaningful (<2 means we can't compute an interval).
+function chapterBpm(beatsMs, ch) {
+  if (!Array.isArray(beatsMs) || beatsMs.length < 2) return null;
+  const start = ch.atMs ?? 0;
+  const end = ch.endMs ?? 0;
+  const inWin = beatsMs.filter((t) => t >= start && t < end);
+  if (inWin.length < 2) return null;
+  const spanMs = inWin[inWin.length - 1] - inWin[0];
+  if (spanMs <= 0) return null;
+  return (60_000 * (inWin.length - 1)) / spanMs;
+}
+
 // ─── Structure category body ──────────────────────────────────────
-// Chapter-by-chapter list. Each row shows the chapter's compound label
-// (texture · voice), duration, and a small tally of the phrase modes
-// inside it. Click a row to focus that chapter — sets focusedIdx, the
-// same state the chapter strip + energy ribbon read from.
-//
-// Phrase modes come from assessment/shape_labeler.py: one of 8 shape
-// ids. We tally them by chapter and render up to the top 3 as compact
-// "MODE × n" chips — enough to communicate the chapter's character
-// without overwhelming the row.
+// Chapter cards with the 5-number overview: time · phrases · beats ·
+// stanzas · actions. No mode pills here — variance reads at a glance
+// from the numbers alone. Stanza modes live on the Stanzas sub-tab;
+// phrase evidence pills on the Phrases sub-tab.
 function StructureCategoryBody({ data }) {
   const chapters = data?.chapters ?? [];
+  const stanzas = data?.stanzas ?? [];
   const phrases = data?.phrases ?? [];
   const focusedIdx = data?.focusedIdx;
   const onFocus = data?.onFocus;
+  const beatsMs = data?.trackBeats?.beatsMs;
+  const actions = data?.actions;
 
   if (!chapters.length) {
     return <EmptyCard height={120} message="No chapters yet — analysis pending." icon="layers" />;
   }
 
-  // Bucket phrases by chapter_id (preferred) or chapter_idx fallback.
-  // chapter_id matches chapter.id; chapter_idx is positional. Old
-  // sidecars wrote one, new sidecars write both — handle both so a
-  // stale sidecar still renders.
-  const byChapter = bucketPhrasesByChapter(phrases, chapters);
+  const stanzasByCh = bucketByChapter(stanzas, chapters);
+  const phrasesByCh = bucketByChapter(phrases, chapters);
 
   return (
     <div style={{
@@ -1391,103 +1515,36 @@ function StructureCategoryBody({ data }) {
       gap: 8,
     }}>
       {chapters.map((c, i) => {
-        const focused = i === focusedIdx;
         const dur = (c.endMs ?? 0) - (c.atMs ?? 0);
-        const category = formatChapterCategory(c);
-        const chapterPhrases = byChapter[i] ?? [];
-        const modeTally = tallyPhraseModes(chapterPhrases);
+        const nPhrases = phrasesByCh[i]?.length ?? 0;
+        const nStanzas = stanzasByCh[i]?.length ?? 0;
+        const nBeats = countInChapter(beatsMs, c, (t) => t);
+        const nActions = countInChapter(actions, c, (a) => a.at);
         return (
-          <button
+          <ChapterCard
             key={c.id ?? i}
-            onClick={() => onFocus?.(i)}
-            style={{
-              display: 'flex', flexDirection: 'column', gap: 6,
-              padding: '10px 12px',
-              borderRadius: 6,
-              border: '1px solid',
-              borderColor: focused ? 'var(--accent)' : 'var(--border)',
-              background: focused ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))' : 'var(--surface-2)',
-              color: 'var(--text)',
-              cursor: 'pointer', textAlign: 'left',
-              fontFamily: 'inherit',
-              minHeight: 96,
-            }}
-          >
-            <div style={{
-              display: 'flex', alignItems: 'baseline', gap: 8,
-              justifyContent: 'space-between',
-            }}>
-              <span style={{
-                fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)',
-                fontFamily: 'var(--font-mono)',
-                letterSpacing: '0.04em',
-              }}>
-                {String(i + 1).padStart(2, '0')}
-              </span>
-              {category && (
-                <span style={{
-                  fontSize: 9, fontWeight: 700, letterSpacing: '0.06em',
-                  padding: '2px 5px', borderRadius: 3,
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text-dim)',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {category}
-                </span>
-              )}
-            </div>
-            <div style={{
-              fontSize: 13, fontWeight: 600,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>
-              {c.name || `Chapter ${i + 1}`}
-            </div>
-            <div style={{
-              fontSize: 10.5, color: 'var(--text-muted)',
-              display: 'flex', gap: 6, alignItems: 'center',
-            }}>
-              <span>{formatDuration(dur)}</span>
-              <span style={{ color: 'var(--text-dim)' }}>·</span>
-              <span>
-                {chapterPhrases.length
-                  ? `${chapterPhrases.length} phrase${chapterPhrases.length === 1 ? '' : 's'}`
-                  : 'no phrases'}
-              </span>
-            </div>
-            {modeTally.length > 0 && (
-              <div style={{
-                display: 'flex', gap: 3, flexWrap: 'wrap',
-                marginTop: 'auto',
-              }}>
-                {modeTally.slice(0, 3).map((m) => (
-                  <span
-                    key={m.label}
-                    title={`${m.label} × ${m.count}`}
-                    style={{
-                      fontSize: 9.5, fontWeight: 700,
-                      padding: '2px 6px', borderRadius: 999,
-                      background: 'var(--surface)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text-muted)',
-                      fontFamily: 'var(--font-mono)',
-                      letterSpacing: '0.02em',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {m.label.toUpperCase()}·{m.count}
-                  </span>
-                ))}
-              </div>
-            )}
-          </button>
+            chapter={c}
+            index={i}
+            focused={i === focusedIdx}
+            onFocus={onFocus}
+            stats={[
+              { label: 'duration', value: formatDuration(dur) },
+              { label: 'phrases',  value: nPhrases ? `${nPhrases} phr` : '—' },
+              { label: 'beats',    value: nBeats   ? `${nBeats} bt`   : '—' },
+              { label: 'stanzas',  value: nStanzas ? `${nStanzas} st`  : '—' },
+              { label: 'actions',  value: nActions ? `${nActions} act` : '—' },
+            ]}
+          />
         );
       })}
     </div>
   );
 }
 
-function bucketPhrasesByChapter(phrases, chapters) {
+// Generic — works for stanzas, phrases, anything carrying chapter_id /
+// chapter_idx. (Was bucketPhrasesByChapter, renamed 2026-05-28 once it
+// became clear "phrases" was ambiguous.)
+function bucketByChapter(phrases, chapters) {
   const out = {};
   const idToIdx = new Map();
   chapters.forEach((c, i) => { if (c.id != null) idToIdx.set(c.id, i); });
@@ -1529,38 +1586,31 @@ function formatDuration(ms) {
   return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
 }
 
-// ─── Phrases category body ────────────────────────────────────────
-// Whole-track chronological phrase strip. Each phrase is one colored
-// block positioned by `at_ms` and sized by duration relative to the
-// whole track; color encodes mode. Below the strip, a percentage
-// legend per mode + the headline stat (N phrases · X.X per chapter).
+// ─── Stanzas category body ────────────────────────────────────────
+// Whole-track chronological stanza strip (one colored block per stanza
+// keyed by mode: tease/steady/edging/break/fast/slow) + percentage
+// legend per mode + chapter cards with per-chapter stanza counts and
+// dominant-mode pills.
 //
-// Distinct from the per-chapter mode tally that previously lived in
-// this category — the design intent is "one glance at the whole
-// track's phrasing shape," not a chapter-by-chapter drill. Per-
-// chapter exploration lives on the dedicated Phrases tab.
-//
-// Modes are ordered per PHRASE_MODE_COLORS in the legend (canonical
-// display order from the design); the strip itself is chronological.
-function PhrasesCategoryBody({ data }) {
-  const phrases = data?.phrases ?? [];
+// Carved out 2026-05-28 from the old PhrasesCategoryBody — the data
+// here has always been stanzas (videoflow's rhythmic-units classifier),
+// it was just mislabeled as phrases.
+function StanzasCategoryBody({ data }) {
+  const stanzas = data?.stanzas ?? [];
   const chapters = data?.chapters ?? [];
+  const focusedIdx = data?.focusedIdx;
+  const onFocus = data?.onFocus;
   const durationMs = Number.isFinite(data?.durationMs) ? data.durationMs : null;
 
-  if (!phrases.length) {
-    return <EmptyCard height={120} message="No phrases yet — analyze a project to populate." icon="list" />;
+  if (!stanzas.length) {
+    return <EmptyCard height={120} message="No stanzas yet — analyze a project to populate." icon="activity" />;
   }
 
-  const total = phrases.length;
-  // Track end for the strip's x-axis. Prefer the project's durationMs
-  // (most accurate); fall back to the rightmost phrase end so the strip
-  // still renders before the project record has duration plumbed.
-  const trackMs = durationMs ?? Math.max(...phrases.map((p) => Number(p.end_ms) || 0), 1);
+  const total = stanzas.length;
+  const trackMs = durationMs ?? Math.max(...stanzas.map((p) => Number(p.end_ms) || 0), 1);
 
-  const tally = tallyPhraseModes(phrases);
+  const tally = tallyPhraseModes(stanzas);
   const paletteOrder = Object.keys(PHRASE_MODE_COLORS);
-  // Order legend by canonical palette order; any unknown modes fall to
-  // the end alphabetized so they don't crowd the recognized ones.
   const orderedTally = [
     ...paletteOrder
       .map((label) => tally.find((t) => t.label === label))
@@ -1570,15 +1620,210 @@ function PhrasesCategoryBody({ data }) {
   ];
 
   const perChapter = chapters.length ? (total / chapters.length) : null;
+  const stanzasByCh = bucketByChapter(stanzas, chapters);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <PhrasesChronoStrip phrases={phrases} trackMs={trackMs} />
+      <PhrasesChronoStrip phrases={stanzas} trackMs={trackMs} />
       <PhrasesLegendFooter
         orderedTally={orderedTally}
         total={total}
         perChapter={perChapter}
       />
+      {chapters.length > 0 && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: 8,
+        }}>
+          {chapters.map((c, i) => {
+            const chStanzas = stanzasByCh[i] ?? [];
+            const modeTally = tallyPhraseModes(chStanzas);
+            const pills = modeTally.slice(0, 4).map((m) => ({
+              label: m.label,
+              count: m.count,
+              color: phraseModeColor(m.label),
+            }));
+            return (
+              <ChapterCard
+                key={c.id ?? i}
+                chapter={c}
+                index={i}
+                focused={i === focusedIdx}
+                onFocus={onFocus}
+                stats={[
+                  { label: 'duration', value: formatDuration((c.endMs ?? 0) - (c.atMs ?? 0)) },
+                  { label: 'stanzas',  value: chStanzas.length ? `${chStanzas.length} st` : '—' },
+                ]}
+                pills={pills}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Phrases category body ────────────────────────────────────────
+// Carved out 2026-05-28. Shows FF editing-phrases from cmd_assess
+// (Step 1 + Step 2 character-drift splitter). Each phrase carries an
+// `evidence` field describing where its boundary came from:
+//   seed         — start of a parent phrase (Step 1)
+//   top_drift    — upper envelope shift
+//   bottom_drift — lower envelope shift
+//   density_drift— actions/sec change
+//   drone_grid   — beat-aligned editing grid in uniform content
+//   snap_only    — Step 1 boundary snapped to nearest downbeat
+//
+// Per-chapter cards show phrase count + a tally of evidence pills
+// colored by source. This is where the "which boundaries are real
+// signal change vs editing grid" story surfaces.
+const EVIDENCE_COLORS = {
+  seed:          '#9ca3af',
+  top_drift:     '#f472b6',  // magenta
+  bottom_drift:  '#fbbf24',  // yellow
+  density_drift: '#34d399',  // green
+  drone_grid:    '#6b7280',  // grey
+  snap_only:     '#06b6d4',  // cyan
+};
+
+function evidencePalette(label) {
+  return EVIDENCE_COLORS[label] || '#9ca3af';
+}
+
+function tallyEvidence(phrases) {
+  const counts = new Map();
+  for (const p of phrases) {
+    const ev = Array.isArray(p?.evidence) ? p.evidence : [];
+    if (!ev.length) {
+      counts.set('seed', (counts.get('seed') || 0) + 1);
+      continue;
+    }
+    for (const tag of ev) {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function PhrasesCategoryBody({ data }) {
+  const phrases = data?.phrases ?? [];
+  const chapters = data?.chapters ?? [];
+  const focusedIdx = data?.focusedIdx;
+  const onFocus = data?.onFocus;
+  const durationMs = Number.isFinite(data?.durationMs) ? data.durationMs : null;
+
+  if (!phrases.length) {
+    return <EmptyCard height={120} message="No phrases yet — analyze a project to populate." icon="list" />;
+  }
+
+  const total = phrases.length;
+  const trackMs = durationMs ?? Math.max(...phrases.map((p) => Number(p.end_ms) || 0), 1);
+  const overallEvidence = tallyEvidence(phrases);
+  const perChapter = chapters.length ? (total / chapters.length) : null;
+  const phrasesByCh = bucketByChapter(phrases, chapters);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Chronological strip — colored by evidence. seed/drone_grid neutral; drift signals pop. */}
+      <div style={{
+        position: 'relative', height: 36,
+        borderRadius: 4, overflow: 'hidden',
+        background: 'var(--surface-2)',
+      }}>
+        {phrases.map((p, i) => {
+          const startMs = Number(p.at_ms) || 0;
+          const endMs = Number(p.end_ms) || startMs;
+          const duration = Math.max(0, endMs - startMs);
+          if (duration <= 0) return null;
+          const leftPct = (startMs / trackMs) * 100;
+          const widthPct = (duration / trackMs) * 100;
+          const ev = Array.isArray(p.evidence) && p.evidence.length ? p.evidence[0] : 'seed';
+          return (
+            <div
+              key={p.id || i}
+              title={`${(p.evidence || ['seed']).join(',')} · ${formatDuration(duration)} · ${formatTimecode(startMs)}–${formatTimecode(endMs)}`}
+              style={{
+                position: 'absolute',
+                left: `${leftPct}%`,
+                width: `calc(${widthPct}% - 1px)`,
+                top: 0, height: '100%',
+                minWidth: 3,
+                background: evidencePalette(ev),
+                borderRadius: 2,
+              }}
+            />
+          );
+        })}
+      </div>
+      {/* Legend + headline */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between',
+        alignItems: 'center', gap: 16, flexWrap: 'wrap',
+      }}>
+        <div style={{
+          display: 'flex', gap: 18, flexWrap: 'wrap',
+          fontSize: 12, color: 'var(--text-muted)',
+        }}>
+          {overallEvidence.map((e) => {
+            const pct = Math.round((e.count / total) * 100);
+            return (
+              <span key={e.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{
+                  width: 10, height: 10, borderRadius: 2,
+                  background: evidencePalette(e.label),
+                }} />
+                <strong style={{ color: 'var(--text)' }}>
+                  {e.label}
+                </strong>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{pct}%</span>
+              </span>
+            );
+          })}
+        </div>
+        <div style={{
+          fontSize: 12, color: 'var(--text-dim)',
+          fontFamily: 'var(--font-mono)',
+        }}>
+          {total} phrases
+          {perChapter != null && ` · ${perChapter.toFixed(1)} per chapter`}
+        </div>
+      </div>
+      {/* Per-chapter cards with evidence pills */}
+      {chapters.length > 0 && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: 8,
+        }}>
+          {chapters.map((c, i) => {
+            const chPhrases = phrasesByCh[i] ?? [];
+            const evTally = tallyEvidence(chPhrases);
+            const pills = evTally.slice(0, 4).map((e) => ({
+              label: e.label,
+              count: e.count,
+              color: evidencePalette(e.label),
+            }));
+            return (
+              <ChapterCard
+                key={c.id ?? i}
+                chapter={c}
+                index={i}
+                focused={i === focusedIdx}
+                onFocus={onFocus}
+                stats={[
+                  { label: 'duration', value: formatDuration((c.endMs ?? 0) - (c.atMs ?? 0)) },
+                  { label: 'phrases',  value: chPhrases.length ? `${chPhrases.length} phr` : '—' },
+                ]}
+                pills={pills}
+              />
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1722,6 +1967,10 @@ function BeatsCategoryBody({ data }) {
     beatsPerBar = Math.round(medDb / medianIoi);
   }
 
+  const chapters = data?.chapters ?? [];
+  const focusedIdx = data?.focusedIdx;
+  const onFocus = data?.onFocus;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{
@@ -1737,6 +1986,35 @@ function BeatsCategoryBody({ data }) {
       </div>
 
       <IoiHistogram iois={iois} medianIoi={medianIoi} stdIoi={stdIoi} />
+
+      {chapters.length > 0 && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: 8,
+        }}>
+          {chapters.map((c, i) => {
+            const chBpm = chapterBpm(beats, c);
+            const nBeats = countInChapter(beats, c, (t) => t);
+            const nDownbeats = countInChapter(downbeats, c, (t) => t);
+            return (
+              <ChapterCard
+                key={c.id ?? i}
+                chapter={c}
+                index={i}
+                focused={i === focusedIdx}
+                onFocus={onFocus}
+                stats={[
+                  { label: 'duration', value: formatDuration((c.endMs ?? 0) - (c.atMs ?? 0)) },
+                  { label: 'beats',    value: nBeats ? `${nBeats} bt` : '—' },
+                  { label: 'BPM',      value: chBpm != null ? `${chBpm.toFixed(1)} bpm` : '—' },
+                  { label: 'downbeats', value: nDownbeats ? `${nDownbeats} db` : '—' },
+                ]}
+              />
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

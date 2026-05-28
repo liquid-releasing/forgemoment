@@ -1420,13 +1420,19 @@ function ChapterCard({ chapter, index, focused, onFocus, stats = [], pills = [] 
       </div>
       {stats.length > 0 && (
         <div style={{
-          fontSize: 10.5, color: 'var(--text-muted)',
-          display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+          display: 'flex', flexDirection: 'column', gap: 1,
         }}>
-          {stats.map((s, i) => (
-            <span key={s.label} style={{ display: 'inline-flex', gap: 4 }}>
-              {i > 0 && <span style={{ color: 'var(--text-dim)' }}>·</span>}
-              <span title={s.label}>{s.value}</span>
+          {stats.map((s) => (
+            <span
+              key={s.label}
+              title={s.label}
+              style={{
+                fontSize: 11.5, color: 'var(--text-muted)',
+                fontFamily: 'var(--font-mono)',
+                lineHeight: 1.4,
+              }}
+            >
+              {s.value}
             </span>
           ))}
         </div>

@@ -193,6 +193,13 @@ export function MediaViewer({
   // Hide the corner "VIDEO" / "AUDIO" / "FUNSCRIPT" mode label. Redundant
   // with the visible toggle in most contexts; the Chapters tab opts it out.
   showModeLabel = true,
+  // Optional slice identity shown in the corner next to the chapter label.
+  // The `chapter` prop names the navigation context ("Chapter 3"); when an
+  // editing tab has a single span in focus it passes that span's short tag
+  // here (e.g. 'P37' / 'S5') so the player tells the user WHICH phrase/
+  // stanza they're editing, not just which chapter. Rendered as a bright
+  // chip after the chapter title. Null → corner shows the chapter only.
+  sliceLabel = null,
   // Thumbnail aspect ratio. When set (CSS aspect-ratio value like '16/9'),
   // the thumbnail area uses `aspect-ratio` instead of flex-fill — total
   // viewer height becomes chrome + thumbnail-by-aspect. Default null
@@ -810,6 +817,16 @@ export function MediaViewer({
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {chapter.title}
             </span>
+            {sliceLabel && (
+              <span style={{
+                flexShrink: 0,
+                padding: '0 5px', borderRadius: 3,
+                fontWeight: 700, fontSize: 9,
+                color: '#0e1117', background: 'rgba(255,255,255,0.92)',
+              }}>
+                {sliceLabel}
+              </span>
+            )}
           </div>
         )}
       </div>

@@ -1535,10 +1535,10 @@ function StructureCategoryBody({ data }) {
             onFocus={onFocus}
             stats={[
               { label: 'duration', value: formatDuration(dur) },
-              { label: 'phrases',  value: nPhrases ? `${nPhrases} phr` : '—' },
-              { label: 'beats',    value: nBeats   ? `${nBeats} bt`   : '—' },
-              { label: 'stanzas',  value: nStanzas ? `${nStanzas} st`  : '—' },
-              { label: 'actions',  value: nActions ? `${nActions} act` : '—' },
+              { label: 'phrases',  value: countStat(nPhrases, 'phrase') },
+              { label: 'beats',    value: countStat(nBeats,   'beat')   },
+              { label: 'stanzas',  value: countStat(nStanzas, 'stanza') },
+              { label: 'actions',  value: countStat(nActions, 'action') },
             ]}
           />
         );
@@ -1590,6 +1590,15 @@ function formatDuration(ms) {
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
   return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+}
+
+// Spelled-out count for chapter-card stat rows — "404 actions" / "1 phrase"
+// / "—". Replaced the bt/st/act/phr/db abbreviations 2026-06-01 (the codes
+// read as noise to users). All these words pluralize regularly (+s), so a
+// single helper covers beats/stanzas/actions/phrases/downbeats.
+function countStat(n, word) {
+  if (!n) return '—';
+  return `${n} ${n === 1 ? word : `${word}s`}`;
 }
 
 // ─── Stanzas category body ────────────────────────────────────────
@@ -1659,7 +1668,7 @@ function StanzasCategoryBody({ data }) {
                 onFocus={onFocus}
                 stats={[
                   { label: 'duration', value: formatDuration((c.endMs ?? 0) - (c.atMs ?? 0)) },
-                  { label: 'stanzas',  value: chStanzas.length ? `${chStanzas.length} st` : '—' },
+                  { label: 'stanzas',  value: countStat(chStanzas.length, 'stanza') },
                 ]}
                 pills={pills}
               />
@@ -1822,7 +1831,7 @@ function PhrasesCategoryBody({ data }) {
                 onFocus={onFocus}
                 stats={[
                   { label: 'duration', value: formatDuration((c.endMs ?? 0) - (c.atMs ?? 0)) },
-                  { label: 'phrases',  value: chPhrases.length ? `${chPhrases.length} phr` : '—' },
+                  { label: 'phrases',  value: countStat(chPhrases.length, 'phrase') },
                 ]}
                 pills={pills}
               />
@@ -2012,9 +2021,9 @@ function BeatsCategoryBody({ data }) {
                 onFocus={onFocus}
                 stats={[
                   { label: 'duration', value: formatDuration((c.endMs ?? 0) - (c.atMs ?? 0)) },
-                  { label: 'beats',    value: nBeats ? `${nBeats} bt` : '—' },
+                  { label: 'beats',    value: countStat(nBeats, 'beat') },
                   { label: 'BPM',      value: chBpm != null ? `${chBpm.toFixed(1)} bpm` : '—' },
-                  { label: 'downbeats', value: nDownbeats ? `${nDownbeats} db` : '—' },
+                  { label: 'downbeats', value: countStat(nDownbeats, 'downbeat') },
                 ]}
               />
             );

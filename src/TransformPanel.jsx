@@ -210,8 +210,15 @@ export function TransformPanel({
               fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
             }}
           >
-            {visibleTransforms.length === 0 && (
+            {/* A value="" option must always exist so that when transformId
+                is null (e.g. just after a category switch — selection is
+                deliberately NOT auto-picked) the native <select> shows this
+                placeholder instead of silently falling back to displaying
+                the first real option, which reads as a false selection. */}
+            {visibleTransforms.length === 0 ? (
               <option value="" disabled>No transforms in this category</option>
+            ) : (
+              <option value="" disabled>Select a transform…</option>
             )}
             {visibleTransforms.map((t) => {
               const isSuggested = t.id === suggestedId;

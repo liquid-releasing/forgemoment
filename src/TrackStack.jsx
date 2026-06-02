@@ -22,6 +22,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fmtTimeShort } from './primitives.jsx';
+import { VELOCITY_COLOR_STOPS, interpolateColorStops } from './Charts.jsx';
 
 const PAD_X = 8;          // horizontal inset so end-bands/ticks don't clip
 const LANE_GAP = 6;       // vertical gap between lanes
@@ -50,6 +51,8 @@ export function TrackStack({
   laneHeights,
   eventRows = 4,                  // lane-packing rows inside the events lane
   showRuler = true,
+  funscriptColor = 'rgba(255,255,255,0.82)', // solid-mode position-line stroke
+  funscriptColorMode = 'solid',   // 'solid' | 'velocity' (per-stroke speed map)
 }) {
   const wrapRef = useRef(null);
   const [width, setWidth] = useState(900);
@@ -92,10 +95,13 @@ export function TrackStack({
   const xToMs = (x) => start + ((x - PAD_X) / plotW) * dur;
   const laneOf = (kind) => layout.rows.find((r) => r.kind === kind);
 
-  // Funscript polyline, scoped + decimated to ~plot width.
-  const funPath = useMemo(() => {
+  // Funscript lane, scoped + decimated to ~plot width. Returns the solid
+  // path `d` plus per-point screen coords + velocities so the velocity
+  // colorMode can stroke each segment through the canonical speed colormap
+  // (same blue→red map as the ChapterRibbon / FunscriptChart).
+  const fun = useMemo(() => {
     const row = laneOf('funscript');
-    if (!row || !actions.length) return '';
+    if (!row || !actions.length) return null;
     const inWin = actions.filter((a) => a.at >= start && a.at <= end);
     const src = inWin.length > 1 ? inWin : actions;
     const target = Math.min(plotW, 1500);
@@ -103,13 +109,23 @@ export function TrackStack({
     const pts = [];
     for (let i = 0; i < src.length; i += stride) {
       const a = src[i];
-      pts.push([xFor(a.at), row.y + (1 - a.pos / 100) * row.h]);
+      pts.push({ x: xFor(a.at), y: row.y + (1 - a.pos / 100) * row.h, at: a.at, pos: a.pos });
     }
     const last = src[src.length - 1];
-    if (last) pts.push([xFor(last.at), row.y + (1 - last.pos / 100) * row.h]);
-    return pts
-      .map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
+    if (last) pts.push({ x: xFor(last.at), y: row.y + (1 - last.pos / 100) * row.h, at: last.at, pos: last.pos });
+    const vels = pts.map((p, i) => {
+      if (i === 0) return 0;
+      const dt = Math.max(1, p.at - pts[i - 1].at);
+      return Math.abs(p.pos - pts[i - 1].pos) / dt;
+    });
+    if (vels.length > 1) vels[0] = vels[1];
+    let maxVel = 0;
+    for (const v of vels) if (v > maxVel) maxVel = v;
+    if (maxVel === 0) maxVel = 1;
+    const d = pts
+      .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
       .join('');
+    return { pts, vels, maxVel, d };
   }, [actions, start, end, plotW, layout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Events overlapping the window, greedily packed into `eventRows`.
@@ -188,10 +204,25 @@ export function TrackStack({
           );
         })}
 
-        {/* Funscript lane — full-strength position line */}
-        {funPath && (
-          <path d={funPath} fill="none"
-                stroke="rgba(255,255,255,0.82)" strokeWidth={1.25}
+        {/* Funscript lane — full-strength position line. Velocity mode
+            strokes each segment by stroke speed (blue→red); solid mode is
+            one path in funscriptColor. */}
+        {fun && funscriptColorMode === 'velocity' && fun.pts.length > 1 && (
+          <g style={{ pointerEvents: 'none' }}>
+            {fun.pts.slice(1).map((p, i) => {
+              const prev = fun.pts[i];
+              const segColor = interpolateColorStops(VELOCITY_COLOR_STOPS, fun.vels[i + 1] / fun.maxVel);
+              return (
+                <line key={i} x1={prev.x} y1={prev.y} x2={p.x} y2={p.y}
+                      stroke={segColor} strokeWidth={1.25}
+                      vectorEffect="non-scaling-stroke" />
+              );
+            })}
+          </g>
+        )}
+        {fun && funscriptColorMode !== 'velocity' && fun.d && (
+          <path d={fun.d} fill="none"
+                stroke={funscriptColor} strokeWidth={1.25}
                 strokeLinejoin="round" vectorEffect="non-scaling-stroke"
                 style={{ pointerEvents: 'none' }} />
         )}

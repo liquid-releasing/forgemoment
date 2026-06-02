@@ -38,6 +38,12 @@ export { PatternRibbon } from './PatternRibbon.jsx';
 // (Patterns: instances; Phrases: phrases; future Beats: beats).
 export { ChapterContextStrip } from './ChapterContextStrip.jsx';
 
+// TrackStack — stacked, time-aligned signal lanes (funscript / events /
+// audio / spectro / thumbs) over one shared axis + one optional baton.
+// The Events-tab editing chassis, reusable by Phrases/Stanzas/Chapters.
+// Events lane takes generic spans; vocabulary is consumer-owned.
+export { TrackStack } from './TrackStack.jsx';
+
 // AppShell — TopBar, TabStrip, StatusBar, AcceptBar, ScopePicker,
 // TabBody, TabHeader, SectionLabel. FFP-specific data (FF_TABS,
 // FF_UTILITY_TABS, hardcoded scope picker / logo / help items) is

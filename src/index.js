@@ -96,6 +96,7 @@ export {
   PreviewChart,
   ScopePlayer,
   ScriptChart,
+  ShapeGlyph,
   Sparkline,
   VELOCITY_COLOR_STOPS,
   bpmTier,

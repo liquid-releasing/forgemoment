@@ -1258,6 +1258,58 @@ export function Sparkline({
   );
 }
 
+// ─── ShapeGlyph ──────────────────────────────────────────────────────
+//
+// Tiny normalized-curve sparkline used as a *shape icon* (not a data
+// chart). Feed it a points array and it draws a small polyline in
+// `color`. One renderer for the two callers that both reduce to "a
+// normalized curve":
+//   - Phrases / Stanzas Shape-lens picker — each shape's canonical
+//     motion curve (Steady/Swell/Taper/Pulse/Burst/Gallop/Tide/Drift).
+//   - Events recipe library — `recipe.preview[]`, the haptic OUTPUT
+//     shape that lands in the .feel.yml.
+// So a "Swell" you *detect* in a phrase and a "Swell/Surge" you
+// *synthesize* as an event read as the same picture. Purely
+// presentational — the vocabulary (which curve = which shape) is
+// consumer-owned, matching how transform/tag catalogs are passed in.
+//
+// `points`: either an array of y-values in [0,1] (0 = bottom, 1 = top;
+// x evenly spaced) or [x, y] pairs (both in [0,1]). y is clamped; a
+// 10% vertical inset keeps the 1.5px stroke from clipping at the edges.
+export function ShapeGlyph({
+  points, color = 'var(--text-dim)', width = 26, height = 16,
+  strokeWidth = 1.5, filled = false, title,
+}) {
+  if (!points || points.length === 0) {
+    return <span style={{ display: 'inline-block', width, height, flexShrink: 0 }} />;
+  }
+  const n = points.length;
+  const xy = points.map((p, i) => {
+    const pair = Array.isArray(p);
+    const x = pair ? p[0] : (n === 1 ? 0.5 : i / (n - 1));
+    const y = Math.max(0, Math.min(1, pair ? p[1] : p));
+    // Inset x by 2% and y into [10,90] so the rounded stroke never clips.
+    return [2 + x * 96, 10 + (1 - y) * 80];
+  });
+  const d = xy
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`)
+    .join(' ');
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+         width={width} height={height} role="img" aria-label={title}
+         style={{ flexShrink: 0, display: 'block' }}>
+      {title && <title>{title}</title>}
+      {filled && (
+        <path d={`${d} L ${xy[n - 1][0].toFixed(2)} 100 L ${xy[0][0].toFixed(2)} 100 Z`}
+              fill={color} fillOpacity={0.16} />
+      )}
+      <path d={d} fill="none" stroke={color} strokeWidth={strokeWidth}
+            strokeLinejoin="round" strokeLinecap="round"
+            vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
 // ─── DiffSparkline ───────────────────────────────────────────────────
 //
 // Overlay chart for stacked-edit rows: shows original as a ghost

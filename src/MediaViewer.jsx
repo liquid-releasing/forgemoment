@@ -218,6 +218,15 @@ export function MediaViewer({
   //   Edit/Phrases:   ['prev','frame-back','back5','play','forward5','frame-forward','next']
   //   Library scrub:  ['back5','play','forward5']
   controls = ['prev', 'frame-back', 'back5', 'play', 'forward5', 'frame-forward', 'next'],
+  // Optional playback-speed bar rendered under the transport. Off by
+  // default (space hog); the Events tab turns it on for frame-precise
+  // begin/end landing. `speed` is controlled when supplied, else internal;
+  // applied to video.playbackRate. New control tokens (used by Events):
+  // 'chapter-start' / 'chapter-end' (jump to scope edges, within-scope —
+  // not prev/next chapter) and 'back1' / 'forward1' (±1s).
+  showSpeed = false,
+  speed: speedProp,
+  onSpeedChange,
   // Show a centered HH:MM:SS.mmm timecode readout below the media surface.
   // Updates from `currentMs` so it ticks at whatever rate the consumer drives
   // playback. Millisecond precision is intentional for frame-accurate edits.
@@ -262,6 +271,20 @@ export function MediaViewer({
     if (modeProp === undefined) setInternalMode(next);
     onModeChange?.(next);
   };
+
+  // Playback speed — controlled when `speed` is supplied, else internal.
+  // Applied to video.playbackRate (re-applied on src change since browsers
+  // reset the rate when the source swaps).
+  const [internalSpeed, setInternalSpeed] = useState(1);
+  const speed = speedProp ?? internalSpeed;
+  const changeSpeed = (s) => {
+    if (speedProp === undefined) setInternalSpeed(s);
+    onSpeedChange?.(s);
+  };
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v) { try { v.playbackRate = speed; } catch { /* not ready */ } }
+  }, [speed, videoSrc, mode]);
 
   // Master clock — emit on every currentMs change so subscribers stay
   // in sync. This is THE contract that makes MediaViewer the time-
@@ -627,6 +650,21 @@ export function MediaViewer({
     const cap = chapter ? chapter.end : (totalMs ?? Number.POSITIVE_INFINITY);
     onSeek?.(Math.min(cap, (currentMs || 0) + 5000));
   };
+  // ±1s nudges — symmetric with back5/forward5, finer step. Same
+  // chapter-scope clamps. Used by the Events transport.
+  const back1 = () => {
+    const floor = chapter ? chapter.start : 0;
+    onSeek?.(Math.max(floor, (currentMs || 0) - 1000));
+  };
+  const forward1 = () => {
+    const cap = chapter ? chapter.end : (totalMs ?? Number.POSITIVE_INFINITY);
+    onSeek?.(Math.min(cap, (currentMs || 0) + 1000));
+  };
+  // Within-scope edge jumps (NOT prev/next chapter): land the playhead on
+  // the current chapter's start / end. Fall back to 0 / totalMs when no
+  // chapter scope is supplied.
+  const toChapterStart = () => onSeek?.(chapter ? chapter.start : 0);
+  const toChapterEnd = () => onSeek?.(chapter ? chapter.end : (totalMs ?? 0));
 
   // Absorb wheel events so they don't fall through to the surrounding
   // page scroll. User flagged 2026-05-20 that wheeling over the viewer
@@ -905,11 +943,64 @@ export function MediaViewer({
               );
             case 'next':
               return <TransportButton key={i} title={nextTitle} onClick={next}>⏭</TransportButton>;
+            case 'chapter-start':
+              return <TransportButton key={i} title="Chapter start" onClick={toChapterStart}>⏮</TransportButton>;
+            case 'chapter-end':
+              return <TransportButton key={i} title="Chapter end" onClick={toChapterEnd}>⏭</TransportButton>;
+            case 'back1':
+              return (
+                <TransportButton key={i} title="Back 1s" onClick={back1}>
+                  <Icon name="chevron-left" size={14} />
+                </TransportButton>
+              );
+            case 'forward1':
+              return (
+                <TransportButton key={i} title="Forward 1s" onClick={forward1}>
+                  <Icon name="chevron-right" size={14} />
+                </TransportButton>
+              );
             default:
               return null;
           }
         })}
       </div>
+
+      {/* Speed bar — its own row directly under the transport (Events).
+          Off by default; prop-gated so Phrases/Stanzas stay compact. */}
+      {showSpeed && (
+        <div style={{
+          padding: '0 8px 8px', display: 'flex', gap: 4, justifyContent: 'center',
+          alignItems: 'center',
+        }}>
+          <span style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+            color: 'var(--text-dim)', marginRight: 4,
+          }}>
+            SPEED
+          </span>
+          {[0.25, 0.5, 1, 2].map((s) => {
+            const on = s === speed;
+            return (
+              <button
+                key={s}
+                onClick={() => changeSpeed(s)}
+                title={`${s}× speed`}
+                style={{
+                  padding: '0 7px', height: 20,
+                  background: on ? 'var(--surface-3, var(--surface-2))' : 'transparent',
+                  border: `1px solid ${on ? 'var(--border-strong, var(--border))' : 'var(--border)'}`,
+                  color: on ? 'var(--text)' : 'var(--text-dim)',
+                  cursor: 'pointer', fontSize: 10.5, fontWeight: 600,
+                  borderRadius: 5, fontFamily: 'inherit',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {s}×
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {showMarkResolved && (
         <div style={{

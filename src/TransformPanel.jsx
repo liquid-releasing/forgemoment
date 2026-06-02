@@ -316,6 +316,38 @@ export function TransformPanel({
 // the value: ints display verbatim with optional unit suffix; fractional
 // values render with two decimals.
 function ParamRow({ param, value, onChange }) {
+  // Boolean params render as a labelled toggle (a slider would coerce to
+  // Number and break). Used by e.g. Range's "Fit to content".
+  if (param.type === 'bool') {
+    const on = Boolean(value);
+    return (
+      <label style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 10, cursor: 'pointer', userSelect: 'none',
+      }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>
+          {param.label}
+        </span>
+        <span
+          role="switch"
+          aria-checked={on}
+          onClick={() => onChange(!on)}
+          style={{
+            position: 'relative', width: 34, height: 18, borderRadius: 999,
+            flexShrink: 0, transition: 'background 120ms',
+            background: on ? 'var(--accent)' : 'var(--surface-3, #2a2f3a)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          <span style={{
+            position: 'absolute', top: 1, left: on ? 16 : 1,
+            width: 14, height: 14, borderRadius: '50%',
+            background: '#fff', transition: 'left 120ms',
+          }} />
+        </span>
+      </label>
+    );
+  }
   const isInt = (param.step ?? 1) >= 1;
   const display = param.unit
     ? `${value}${param.unit}`

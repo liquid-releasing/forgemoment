@@ -45,7 +45,7 @@ const MAGMA_STOPS = [
   [0.45, [129, 37, 129]], [0.6, [181, 54, 122]], [0.72, [229, 80, 100]],
   [0.85, [251, 135, 97]], [0.93, [254, 194, 135]], [1.0, [252, 253, 191]],
 ];
-function magmaRGB(t) {
+export function magmaRGB(t) {
   const x = Math.max(0, Math.min(1, t));
   let i = 0;
   while (i < MAGMA_STOPS.length - 1 && x > MAGMA_STOPS[i + 1][0]) i += 1;

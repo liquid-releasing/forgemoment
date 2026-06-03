@@ -39,6 +39,7 @@ import { Sparkline } from './Charts.jsx';
 import { Icon } from './primitives.jsx';
 import { MediaViewer } from './MediaViewer.jsx';
 import { useNativeWheel } from './hooks/useNativeWheel.js';
+import { magmaRGB } from './TrackStack.jsx';
 
 export function ChapterContextStrip({
   chapter,                  // { at_ms, end_ms }
@@ -63,6 +64,16 @@ export function ChapterContextStrip({
   media = null,             // { src, kind: 'video'|'audio', title? } | null
   isPlaying = false,
   onPlayPause,
+  // Optional reference lanes stacked under the funscript waveform (audio
+  // peaks + magma spectrogram), windowed to the same zoom view. Present →
+  // the strip splits into funscript / audio / spectro sub-lanes.
+  waveform = null,          // { peaks:[0..1], hopMs }
+  spectrogram = null,       // { cells, nMels, nFrames, hopMs }
+  beats = null,             // { beatsMs:[…] } | [ms]
+  // fill → stretch to the grid cell (e.g. match an adjacent video player's
+  // height) and measure the real height for the lane split, instead of using
+  // `height` as a fixed value. The grid cell must allow stretch.
+  fill = false,
   height = 96,
 }) {
   return (
@@ -74,6 +85,7 @@ export function ChapterContextStrip({
       // only "lifted" surface.
       background: 'transparent',
       flexShrink: 0,
+      ...(fill ? { height: '100%', display: 'flex', flexDirection: 'column' } : {}),
     }}>
       {/* Header row renders only if there's content. Consumers that move
           the title into a tab-level row above the strip pass header=null
@@ -119,6 +131,7 @@ export function ChapterContextStrip({
           gridTemplateColumns: media?.src ? 'minmax(360px, 1fr) 300px' : undefined,
           gap: media?.src ? 14 : 0,
           alignItems: 'stretch',
+          ...(fill ? { flex: 1, minHeight: 0 } : {}),
         }}>
           <StripBody
             chapter={chapter}
@@ -127,6 +140,10 @@ export function ChapterContextStrip({
             onSelectBand={onSelectBand}
             currentMs={currentMs}
             onSeek={onSeek}
+            waveform={waveform}
+            spectrogram={spectrogram}
+            beats={beats}
+            fill={fill}
             height={height}
           />
           {media?.src && (
@@ -174,16 +191,24 @@ const PAD_BOTTOM = 16;
 // `PAD_RIGHT`. Y-axis labels live in the outer left padding; nothing
 // else does. xFor returns coordinates *inside the plot area* — callers
 // stay agnostic of the outer padding.
-function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, height }) {
+function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, waveform, spectrogram, beats, fill, height }) {
   const wrapRef = useRef(null);
   const plotRef = useRef(null);
+  const specRef = useRef(null);
   const [pxWidth, setPxWidth] = useState(800);
+  const [pxHeight, setPxHeight] = useState(height);
   useEffect(() => {
     if (!wrapRef.current) return undefined;
-    const ro = new ResizeObserver(([entry]) => setPxWidth(entry.contentRect.width));
+    const ro = new ResizeObserver(([entry]) => {
+      setPxWidth(entry.contentRect.width);
+      setPxHeight(entry.contentRect.height);
+    });
     ro.observe(wrapRef.current);
     return () => ro.disconnect();
   }, []);
+  // In fill mode the rendered height (measured) drives the lane split so it
+  // tracks the stretched grid cell; otherwise the fixed `height` prop does.
+  const effHeight = fill ? (pxHeight || height) : height;
 
   // ── Wheel-zoomable view window ──────────────────────────────────────
   // The strip's visible time range. Initially the whole chapter; wheel
@@ -238,6 +263,96 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
     return out;
   }, [view.start, view.end, viewSpan]);
 
+  // ── Sub-lane layout — split the plot into funscript (top) + optional
+  // audio + spectro lanes. funscript carries weight 2, the refs weight 1
+  // each. Heights are px (the strip `height` is a known number), so the
+  // Y-labels + lanes line up exactly with the funscript portion.
+  const plotH = Math.max(1, effHeight - PAD_TOP - PAD_BOTTOM);
+  const hasAudio = !!(waveform?.peaks?.length);
+  const hasSpectro = !!(spectrogram?.cells?.length && spectrogram?.nFrames);
+  const laneRects = useMemo(() => {
+    const defs = [{ kind: 'funscript', w: 2 }];
+    if (hasAudio) defs.push({ kind: 'audio', w: 1 });
+    if (hasSpectro) defs.push({ kind: 'spectro', w: 1 });
+    const totalW = defs.reduce((s, l) => s + l.w, 0);
+    let acc = 0;
+    const rects = {};
+    for (const l of defs) {
+      const h = plotH * (l.w / totalW);
+      rects[l.kind] = { top: acc, h };
+      acc += h;
+    }
+    return rects;
+  }, [hasAudio, hasSpectro, plotH]);
+  const funR = laneRects.funscript;
+
+  // Audio lane — peaks within the visible (zoomed) window, decimated to a
+  // 0..100 viewBox so the SVG stretches to the lane rect. Beat ticks overlay.
+  const audioLane = useMemo(() => {
+    if (!hasAudio) return null;
+    const peaks = waveform.peaks;
+    const hop = waveform.hopMs || 10;
+    const f0 = Math.max(0, Math.floor(view.start / hop));
+    const f1 = Math.min(peaks.length, Math.ceil(view.end / hop));
+    if (f1 - f0 < 2) return null;
+    const cols = Math.max(2, Math.min(700, f1 - f0));
+    const amps = [];
+    let mx = 0;
+    for (let c = 0; c < cols; c += 1) {
+      const a = f0 + Math.floor((c / cols) * (f1 - f0));
+      const b = f0 + Math.floor(((c + 1) / cols) * (f1 - f0));
+      let m = 0;
+      for (let i = a; i < Math.max(a + 1, b); i += 1) {
+        const v = Math.abs(peaks[i] ?? 0);
+        if (v > m) m = v;
+      }
+      amps.push(m);
+      if (m > mx) mx = m;
+    }
+    if (mx <= 0) mx = 1;
+    const top = [];
+    const bot = [];
+    for (let c = 0; c < cols; c += 1) {
+      const x = (c / (cols - 1)) * 100;
+      const h = (amps[c] / mx) * 47;
+      top.push(`${x.toFixed(2)},${(50 - h).toFixed(2)}`);
+      bot.push(`${x.toFixed(2)},${(50 + h).toFixed(2)}`);
+    }
+    const d = `M${top.join('L')}L${bot.reverse().join('L')}Z`;
+    const beatMs = Array.isArray(beats) ? beats : (beats?.beatsMs || []);
+    const tickX = beatMs
+      .filter((b) => b >= view.start && b <= view.end)
+      .map((b) => ((b - view.start) / viewSpan) * 100);
+    return { d, tickX };
+  }, [hasAudio, waveform, beats, view.start, view.end, viewSpan]);
+
+  // Spectro lane — paint in-window cells to the lane canvas (magma, low-freq
+  // bottom). Redraws on zoom/scope change, not per frame.
+  useEffect(() => {
+    const canvas = specRef.current;
+    if (!canvas || !hasSpectro) return;
+    const { cells, nMels, nFrames } = spectrogram;
+    const hop = spectrogram.hopMs || 10;
+    const f0 = Math.max(0, Math.floor(view.start / hop));
+    const f1 = Math.min(nFrames, Math.ceil(view.end / hop));
+    const vw = Math.max(1, f1 - f0);
+    canvas.width = vw;
+    canvas.height = nMels;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(vw, nMels);
+    const data = img.data;
+    for (let t = 0; t < vw; t += 1) {
+      const off = (f0 + t) * nMels;
+      for (let bin = 0; bin < nMels; bin += 1) {
+        const [r, g, b] = magmaRGB((cells[off + bin] ?? 0) / 255);
+        const dr = nMels - 1 - bin;
+        const px = (dr * vw + t) * 4;
+        data[px] = r; data[px + 1] = g; data[px + 2] = b; data[px + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }, [hasSpectro, spectrogram, view.start, view.end]);
+
   const handleBackgroundClick = (e) => {
     if (!onSeek) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -282,7 +397,9 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
     <div
       ref={wrapRef}
       style={{
-        position: 'relative', height,
+        position: 'relative',
+        height: fill ? '100%' : height,
+        minHeight: fill ? height : undefined,
         background: 'var(--bg)',
         border: '1px solid var(--border)', borderRadius: 6,
         overflow: 'hidden',
@@ -295,7 +412,7 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
       <div style={{
         position: 'absolute',
         left: 0, top: PAD_TOP, width: PAD_LEFT,
-        height: height - PAD_TOP - PAD_BOTTOM,
+        height: funR.h,
         fontFamily: 'var(--font-mono)', fontSize: 9,
         color: 'var(--text-dim)', pointerEvents: 'none',
       }}>
@@ -323,7 +440,10 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
             to draw only the visible view window, expressed in
             chapter-relative time. Zooming in passes a smaller sub-range
             to Sparkline; the curve stretches to fill the plot width. */}
-        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        <div style={{
+          position: 'absolute', left: 0, right: 0,
+          top: funR.top, height: funR.h, pointerEvents: 'none',
+        }}>
           <Sparkline
             actions={chapterActions}
             start={view.start - chapter.at_ms}
@@ -333,6 +453,40 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, h
             filled
           />
         </div>
+
+        {/* Audio lane — centered waveform (0..100 viewBox, stretched) + beat
+            ticks, windowed to the zoom view. */}
+        {audioLane && laneRects.audio && (
+          <div style={{
+            position: 'absolute', left: 0, right: 0,
+            top: laneRects.audio.top, height: laneRects.audio.h,
+            borderTop: '1px solid rgba(255,255,255,0.06)', pointerEvents: 'none',
+          }}>
+            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none"
+                 style={{ display: 'block' }}>
+              {audioLane.tickX.map((x, i) => (
+                <line key={i} x1={x} x2={x} y1={4} y2={96}
+                      stroke="rgba(255,255,255,0.16)" strokeWidth={0.4} />
+              ))}
+              <path d={audioLane.d} fill="rgba(120,180,255,0.45)"
+                    stroke="rgba(160,205,255,0.85)" strokeWidth={0.3} />
+            </svg>
+          </div>
+        )}
+
+        {/* Spectro lane — magma canvas (internal px size = frames×mels),
+            CSS-stretched across the lane. */}
+        {hasSpectro && laneRects.spectro && (
+          <div style={{
+            position: 'absolute', left: 0, right: 0,
+            top: laneRects.spectro.top, height: laneRects.spectro.h,
+            borderTop: '1px solid rgba(255,255,255,0.06)', pointerEvents: 'none',
+          }}>
+            <canvas ref={specRef} style={{
+              display: 'block', width: '100%', height: '100%',
+            }} />
+          </div>
+        )}
 
         {/* Layer 2 — per-band wash. Consumer sets opacity 0 to let the
             waveform read at full contrast (Patterns: selected = 0). */}

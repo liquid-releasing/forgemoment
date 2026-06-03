@@ -38,10 +38,34 @@ const DEFAULT_HEIGHTS = {
   thumbs: 44,
 };
 
+// Compact magma ramp (matches the MediaViewer spectrogram palette closely
+// enough for the lane thumbnail). t in 0..1 → [r,g,b].
+const MAGMA_STOPS = [
+  [0.0, [0, 0, 4]], [0.15, [28, 16, 68]], [0.3, [79, 18, 123]],
+  [0.45, [129, 37, 129]], [0.6, [181, 54, 122]], [0.72, [229, 80, 100]],
+  [0.85, [251, 135, 97]], [0.93, [254, 194, 135]], [1.0, [252, 253, 191]],
+];
+function magmaRGB(t) {
+  const x = Math.max(0, Math.min(1, t));
+  let i = 0;
+  while (i < MAGMA_STOPS.length - 1 && x > MAGMA_STOPS[i + 1][0]) i += 1;
+  const [t0, c0] = MAGMA_STOPS[i];
+  const [t1, c1] = MAGMA_STOPS[Math.min(i + 1, MAGMA_STOPS.length - 1)];
+  const f = t1 > t0 ? (x - t0) / (t1 - t0) : 0;
+  return [
+    Math.round(c0[0] + (c1[0] - c0[0]) * f),
+    Math.round(c0[1] + (c1[1] - c0[1]) * f),
+    Math.round(c0[2] + (c1[2] - c0[2]) * f),
+  ];
+}
+
 export function TrackStack({
   scope,                          // { start, end } ms — the slice window
   actions = [],                   // funscript [{ at, pos }] (any range)
   events = [],                    // [{ id, start, end, color, label }]
+  waveform = null,                // { peaks:[0..1], hopMs } — audio lane
+  spectrogram = null,             // { cells, nMels, nFrames, hopMs } — spectro lane
+  beats = null,                   // { beatsMs:[…] } | [ms] — ticks on the audio lane
   lanes = ['events', 'funscript'],// top→bottom order; only present data renders
   currentMs = null,
   baton = 'line',                 // 'line' | 'none'
@@ -73,7 +97,9 @@ export function TrackStack({
   const activeLanes = lanes.filter((l) => {
     if (l === 'funscript') return actions.length > 0;
     if (l === 'events') return true; // always show the lane (may be empty)
-    return false; // audio/spectro/thumbs not wired yet
+    if (l === 'audio') return !!(waveform?.peaks?.length);
+    if (l === 'spectro') return !!(spectrogram?.cells?.length && spectrogram?.nFrames);
+    return false; // thumbs not wired yet
   });
 
   // Vertical layout: stack lanes with gaps, ruler at the very bottom.
@@ -144,6 +170,79 @@ export function TrackStack({
     });
   }, [events, start, end, layout]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Audio lane — peaks within the scope window, decimated to the plot width
+  // and drawn as a centered filled waveform (full-strength). Beat ticks (if
+  // provided) overlay as faint verticals.
+  const audio = useMemo(() => {
+    const row = laneOf('audio');
+    if (!row || !waveform?.peaks?.length) return null;
+    const peaks = waveform.peaks;
+    const hopMs = waveform.hopMs || 10;
+    const f0 = Math.max(0, Math.floor(start / hopMs));
+    const f1 = Math.min(peaks.length, Math.ceil(end / hopMs));
+    if (f1 - f0 < 2) return null;
+    const cols = Math.max(2, Math.min(Math.floor(plotW), f1 - f0));
+    const cy = row.y + row.h / 2;
+    const half = row.h / 2 - 2;
+    const colAmp = new Array(cols).fill(0);
+    let maxAmp = 0;
+    for (let c = 0; c < cols; c += 1) {
+      const a = f0 + Math.floor((c / cols) * (f1 - f0));
+      const b = f0 + Math.floor(((c + 1) / cols) * (f1 - f0));
+      let m = 0;
+      for (let i = a; i < Math.max(a + 1, b); i += 1) {
+        const v = Math.abs(peaks[i] ?? 0);
+        if (v > m) m = v;
+      }
+      colAmp[c] = m;
+      if (m > maxAmp) maxAmp = m;
+    }
+    if (maxAmp <= 0) maxAmp = 1;
+    const top = [];
+    const bot = [];
+    for (let c = 0; c < cols; c += 1) {
+      const x = PAD_X + (c / (cols - 1)) * plotW;
+      const h = (colAmp[c] / maxAmp) * half;
+      top.push(`${x.toFixed(1)},${(cy - h).toFixed(1)}`);
+      bot.push(`${x.toFixed(1)},${(cy + h).toFixed(1)}`);
+    }
+    const d = `M${top.join('L')}L${bot.reverse().join('L')}Z`;
+    const beatMs = Array.isArray(beats) ? beats : (beats?.beatsMs || []);
+    const tickXs = beatMs.filter((b) => b >= start && b <= end).map((b) => xFor(b));
+    return { d, row, tickXs };
+  }, [waveform, beats, start, end, plotW, layout]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Spectro lane — paint the in-window cells to an offscreen canvas (magma)
+  // and hand the data URL to an <image> scaled across the lane. Regenerates
+  // only when the spectrogram or the scope window changes (not per frame).
+  const spectro = useMemo(() => {
+    const row = laneOf('spectro');
+    if (!row || !spectrogram?.cells?.length) return null;
+    const { cells, nMels, nFrames } = spectrogram;
+    const hopMs = spectrogram.hopMs || 10;
+    if (!nMels || !nFrames || typeof document === 'undefined') return null;
+    const f0 = Math.max(0, Math.floor(start / hopMs));
+    const f1 = Math.min(nFrames, Math.ceil(end / hopMs));
+    const vw = Math.max(1, f1 - f0);
+    const canvas = document.createElement('canvas');
+    canvas.width = vw;
+    canvas.height = nMels;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(vw, nMels);
+    const data = img.data;
+    for (let t = 0; t < vw; t += 1) {
+      const srcOff = (f0 + t) * nMels;
+      for (let bin = 0; bin < nMels; bin += 1) {
+        const [r, g, b] = magmaRGB((cells[srcOff + bin] ?? 0) / 255);
+        const dstRow = nMels - 1 - bin; // low freq at bottom
+        const px = (dstRow * vw + t) * 4;
+        data[px] = r; data[px + 1] = g; data[px + 2] = b; data[px + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return { url: canvas.toDataURL(), row };
+  }, [spectrogram, start, end, layout]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Ruler ticks: ~5 evenly spaced.
   const ticks = useMemo(() => {
     const n = 5;
@@ -164,19 +263,30 @@ export function TrackStack({
           onSeek(Math.max(start, Math.min(end, xToMs(e.clientX - rect.left))));
         }}
       >
-        {/* Lane backgrounds + labels */}
+        {/* Lane backgrounds (labels are drawn last, on top of lane content) */}
         {layout.rows.map((row) => (
-          <g key={row.kind}>
-            <rect x={PAD_X} y={row.y} width={plotW} height={row.h}
-                  fill="rgba(255,255,255,0.02)" rx={4} />
-            <text x={PAD_X + 6} y={row.y + 11}
-                  fontSize={9} fontWeight={700} fill={LABEL_FILL}
-                  style={{ pointerEvents: 'none', letterSpacing: '0.08em',
-                           textTransform: 'uppercase' }}>
-              {row.kind}
-            </text>
-          </g>
+          <rect key={row.kind} x={PAD_X} y={row.y} width={plotW} height={row.h}
+                fill="rgba(255,255,255,0.02)" rx={4} />
         ))}
+
+        {/* Spectro lane — magma image scaled to the lane rect */}
+        {spectro && (
+          <image href={spectro.url} x={PAD_X} y={spectro.row.y}
+                 width={plotW} height={spectro.row.h}
+                 preserveAspectRatio="none" style={{ pointerEvents: 'none' }} />
+        )}
+
+        {/* Audio lane — centered waveform + beat ticks */}
+        {audio && (
+          <g style={{ pointerEvents: 'none' }}>
+            {audio.tickXs.map((x, i) => (
+              <line key={i} x1={x} x2={x} y1={audio.row.y + 2} y2={audio.row.y + audio.row.h - 2}
+                    stroke="rgba(255,255,255,0.16)" strokeWidth={1} />
+            ))}
+            <path d={audio.d} fill="rgba(120,180,255,0.45)"
+                  stroke="rgba(160,205,255,0.85)" strokeWidth={0.6} />
+          </g>
+        )}
 
         {/* Events lane — colored bands, lane-packed */}
         {eventsRow && placedEvents.map((ev) => {
@@ -226,6 +336,18 @@ export function TrackStack({
                 strokeLinejoin="round" vectorEffect="non-scaling-stroke"
                 style={{ pointerEvents: 'none' }} />
         )}
+
+        {/* Lane labels — drawn last so they stay legible over the spectro
+            image / audio fill. */}
+        {layout.rows.map((row) => (
+          <text key={`lbl-${row.kind}`} x={PAD_X + 6} y={row.y + 11}
+                fontSize={9} fontWeight={700}
+                fill={row.kind === 'spectro' ? 'rgba(255,255,255,0.62)' : LABEL_FILL}
+                style={{ pointerEvents: 'none', letterSpacing: '0.08em',
+                         textTransform: 'uppercase' }}>
+            {row.kind}
+          </text>
+        ))}
 
         {/* Ruler */}
         {showRuler && ticks.map((ms, i) => (

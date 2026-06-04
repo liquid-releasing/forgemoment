@@ -217,11 +217,17 @@ export function ChapterRibbon({
     }
     const d = `M${top.join('L')}L${bot.reverse().join('L')}Z`;
     const beatMs = Array.isArray(beats) ? beats : (beats?.beatsMs || []);
-    const tickX = beatMs
-      .filter((b) => b >= viewStart && b <= viewEnd)
-      .map((b) => ((b - viewStart) / viewSpan) * 100);
+    const inView = beatMs.filter((b) => b >= viewStart && b <= viewEnd);
+    // Skip beat ticks when they'd pack tighter than ~4px. At the full-track
+    // zoom this ribbon shows there can be thousands of beats; thousands of
+    // translucent white tick lines stack into a solid white wash over the
+    // whole audio lane (the "white audio lane" bug). Ticks only read as ticks
+    // when they're distinct, so drop them once the view is that dense.
+    const tickX = inView.length <= pxWidth / 4
+      ? inView.map((b) => ((b - viewStart) / viewSpan) * 100)
+      : [];
     return { d, tickX };
-  }, [hasAudio, waveform, beats, viewStart, viewEnd, viewSpan]);
+  }, [hasAudio, waveform, beats, viewStart, viewEnd, viewSpan, pxWidth]);
 
   useEffect(() => {
     const canvas = specRef.current;
@@ -406,10 +412,13 @@ export function ChapterRibbon({
           <div style={{
             position: 'absolute', left: 0, right: 0,
             top: laneRects.audio.top, height: laneRects.audio.h,
+            background: 'var(--bg)',          // explicit dark lane floor, like TrackStack
             borderTop: '1px solid rgba(255,255,255,0.06)', pointerEvents: 'none',
           }}>
             <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none"
                  style={{ display: 'block' }}>
+              {/* tickX is empty when the view is too dense to resolve ticks —
+                  see audioLane: thousands of stacked lines read as solid white. */}
               {audioLane.tickX.map((x, i) => (
                 <line key={i} x1={x} x2={x} y1={4} y2={96}
                       stroke="rgba(255,255,255,0.16)" strokeWidth={0.4} />
@@ -417,6 +426,7 @@ export function ChapterRibbon({
               <path d={audioLane.d} fill="rgba(120,180,255,0.45)"
                     stroke="rgba(160,205,255,0.85)" strokeWidth={0.3} />
             </svg>
+            <LaneLabel text="Audio" />
           </div>
         )}
 
@@ -428,6 +438,7 @@ export function ChapterRibbon({
             borderTop: '1px solid rgba(255,255,255,0.06)', pointerEvents: 'none',
           }}>
             <canvas ref={specRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+            <LaneLabel text="Spectro" bright />
           </div>
         )}
 
@@ -451,6 +462,21 @@ export function ChapterRibbon({
         <XAxis ticks={xTicks} top={bandsHeight} height={X_AXIS_PX} />
       </div>
     </div>
+  );
+}
+
+// Small lane caption (Audio / Spectro), top-left, matching TrackStack's
+// uppercase tracked label. `bright` lifts the contrast for the busy magma
+// spectro lane.
+function LaneLabel({ text, bright = false }) {
+  return (
+    <span style={{
+      position: 'absolute', top: 3, left: 6,
+      fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+      textTransform: 'uppercase',
+      color: bright ? 'rgba(255,255,255,0.62)' : 'rgba(255,255,255,0.34)',
+      pointerEvents: 'none',
+    }}>{text}</span>
   );
 }
 

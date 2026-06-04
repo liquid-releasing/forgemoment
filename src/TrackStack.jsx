@@ -209,7 +209,10 @@ export function TrackStack({
     }
     const d = `M${top.join('L')}L${bot.reverse().join('L')}Z`;
     const beatMs = Array.isArray(beats) ? beats : (beats?.beatsMs || []);
-    const tickXs = beatMs.filter((b) => b >= start && b <= end).map((b) => xFor(b));
+    const inView = beatMs.filter((b) => b >= start && b <= end);
+    // Drop ticks once they'd pack tighter than ~4px — thousands of stacked
+    // translucent lines wash the audio lane solid white (see ChapterRibbon).
+    const tickXs = inView.length <= plotW / 4 ? inView.map((b) => xFor(b)) : [];
     return { d, row, tickXs };
   }, [waveform, beats, start, end, plotW, layout]); // eslint-disable-line react-hooks/exhaustive-deps
 

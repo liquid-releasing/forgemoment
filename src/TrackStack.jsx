@@ -27,6 +27,7 @@ import { VELOCITY_COLOR_STOPS, interpolateColorStops } from './Charts.jsx';
 const PAD_X = 8;          // horizontal inset so end-bands/ticks don't clip
 const LANE_GAP = 6;       // vertical gap between lanes
 const RULER_H = 16;       // bottom time-ruler height
+const MAX_SPECTRO_COLS = 2048;  // cap offscreen spectro-canvas width (long tracks overflow the browser's max canvas dimension otherwise)
 const LABEL_FILL = 'rgba(255,255,255,0.34)';
 
 // Default per-lane heights; consumer can override via `laneHeights`.
@@ -223,7 +224,16 @@ export function TrackStack({
     if (!nMels || !nFrames || typeof document === 'undefined') return null;
     const f0 = Math.max(0, Math.floor(start / hopMs));
     const f1 = Math.min(nFrames, Math.ceil(end / hopMs));
-    const vw = Math.max(1, f1 - f0);
+    const frames = Math.max(1, f1 - f0);
+    // Cap the offscreen canvas width. One column per frame overflows the
+    // browser's max canvas dimension on long tracks (e.g. a 92-min file at
+    // hop=23ms is ~240k frames, well past the ~65535px limit) — the canvas
+    // then fails to allocate and toDataURL() returns "data:," which renders
+    // as a broken-image box. We never need more columns than display pixels
+    // anyway, so when there are more frames than MAX_SPECTRO_COLS we
+    // max-pool each output column over its frame span (max preserves the
+    // visible energy peaks better than averaging).
+    const vw = Math.min(frames, MAX_SPECTRO_COLS);
     const canvas = document.createElement('canvas');
     canvas.width = vw;
     canvas.height = nMels;
@@ -231,16 +241,28 @@ export function TrackStack({
     const img = ctx.createImageData(vw, nMels);
     const data = img.data;
     for (let t = 0; t < vw; t += 1) {
-      const srcOff = (f0 + t) * nMels;
+      const rel0 = Math.floor((t / vw) * frames);
+      const rel1 = Math.max(rel0 + 1, Math.floor(((t + 1) / vw) * frames));
+      const a = f0 + rel0;
+      const b = f0 + rel1;
       for (let bin = 0; bin < nMels; bin += 1) {
-        const [r, g, b] = magmaRGB((cells[srcOff + bin] ?? 0) / 255);
+        let m = 0;
+        for (let fr = a; fr < b; fr += 1) {
+          const v = cells[fr * nMels + bin] ?? 0;
+          if (v > m) m = v;
+        }
+        const [r, g, bl] = magmaRGB(m / 255);
         const dstRow = nMels - 1 - bin; // low freq at bottom
         const px = (dstRow * vw + t) * 4;
-        data[px] = r; data[px + 1] = g; data[px + 2] = b; data[px + 3] = 255;
+        data[px] = r; data[px + 1] = g; data[px + 2] = bl; data[px + 3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);
-    return { url: canvas.toDataURL(), row };
+    const url = canvas.toDataURL();
+    // Defensive: a failed/oversized canvas yields the empty "data:," URL.
+    // Drop the lane rather than render a broken-image box.
+    if (!url || url.length < 16) return null;
+    return { url, row };
   }, [spectrogram, start, end, layout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ruler ticks: ~5 evenly spaced.

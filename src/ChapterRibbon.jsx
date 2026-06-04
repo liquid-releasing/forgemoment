@@ -33,8 +33,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNativeWheel } from './hooks/useNativeWheel.js';
 import { Icon } from './primitives.jsx';
 import { Sparkline } from './Charts.jsx';
+import { magmaRGB } from './TrackStack.jsx';
 
 const GREY_TINT = '#6b7280';        // bands without a tone set
+const MAX_SPECTRO_COLS = 2048;      // cap spectro-canvas width (long tracks overflow the browser's max canvas dimension otherwise)
 const MIN_BAND_PX = 6;              // hide title/menu when the band is narrower than this
 const MIN_TITLE_PX = 60;            // hide title when the band is narrower than this
 const MAX_ZOOM_PADDING = 0.08;      // 8% of viewport reserved on each side at max zoom
@@ -96,6 +98,15 @@ export function ChapterRibbon({
   // strip]] thinking); the MediaViewer master clock made it useful
   // again for non-video modes.
   currentMs,
+  // Optional reference lanes under the chapter bands (audio peaks + magma
+  // spectrogram), windowed to the same zoom view. Present → the bands shrink
+  // to the top sub-lane and audio/spectro stack beneath (Characters tab).
+  waveform = null,          // { peaks:[0..1], hopMs }
+  spectrogram = null,       // { cells, nMels, nFrames, hopMs }
+  beats = null,             // { beatsMs:[…] } | [ms]
+  // fill → stretch to the grid cell + measure the real height for the lane
+  // split (match an adjacent video player). Cell must allow stretch.
+  fill = false,
 }) {
   const sortedBands = useMemo(
     () => [...(bands || [])].sort((a, b) => a.at_ms - b.at_ms),
@@ -130,20 +141,126 @@ export function ChapterRibbon({
   // resize, devtools open, etc.). plotWidth is the band area only —
   // it excludes the Y-axis gutter on the left when axes are shown.
   const wrapRef = useRef(null);
+  const specRef = useRef(null);
   const [outerWidth, setOuterWidth] = useState(800);
+  const [outerHeight, setOuterHeight] = useState(height);
   useEffect(() => {
     if (!wrapRef.current) return undefined;
-    const ro = new ResizeObserver(([entry]) => setOuterWidth(entry.contentRect.width));
+    const ro = new ResizeObserver(([entry]) => {
+      setOuterWidth(entry.contentRect.width);
+      setOuterHeight(entry.contentRect.height);
+    });
     ro.observe(wrapRef.current);
     return () => ro.disconnect();
   }, []);
   const yAxisPx = showAxes ? Y_AXIS_PX : 0;
   const xAxisPx = showAxes ? X_AXIS_PX : 0;
   const pxWidth = Math.max(1, outerWidth - yAxisPx);
+  // In fill mode the measured height drives the layout so it tracks the
+  // stretched grid cell; otherwise the fixed `height` prop does.
+  const effHeight = fill ? (outerHeight || height) : height;
 
   const viewSpan = Math.max(1, viewEnd - viewStart);
   const xFor = (ms) => ((ms - viewStart) / viewSpan) * pxWidth;
   const msFor = (px) => viewStart + (px / Math.max(1, pxWidth)) * viewSpan;
+
+  // ── Sub-lane split — when reference lanes are present, the bands occupy
+  // the top sub-lane (weight 2) and audio / spectro stack beneath (weight 1
+  // each). All windowed to the zoom view so they pan/zoom with the bands.
+  const hasAudio = !!(waveform?.peaks?.length);
+  const hasSpectro = !!(spectrogram?.cells?.length && spectrogram?.nFrames);
+  const lanesBandsHeight = Math.max(1, effHeight - xAxisPx);
+  const laneRects = useMemo(() => {
+    const defs = [{ kind: 'bands', w: 2 }];
+    if (hasAudio) defs.push({ kind: 'audio', w: 1 });
+    if (hasSpectro) defs.push({ kind: 'spectro', w: 1 });
+    const totalW = defs.reduce((s, l) => s + l.w, 0);
+    let acc = 0;
+    const rects = {};
+    for (const l of defs) {
+      const h = lanesBandsHeight * (l.w / totalW);
+      rects[l.kind] = { top: acc, h };
+      acc += h;
+    }
+    return rects;
+  }, [hasAudio, hasSpectro, lanesBandsHeight]);
+
+  const audioLane = useMemo(() => {
+    if (!hasAudio) return null;
+    const peaks = waveform.peaks;
+    const hop = waveform.hopMs || 10;
+    const f0 = Math.max(0, Math.floor(viewStart / hop));
+    const f1 = Math.min(peaks.length, Math.ceil(viewEnd / hop));
+    if (f1 - f0 < 2) return null;
+    const cols = Math.max(2, Math.min(800, f1 - f0));
+    const amps = [];
+    let mx = 0;
+    for (let c = 0; c < cols; c += 1) {
+      const a = f0 + Math.floor((c / cols) * (f1 - f0));
+      const b = f0 + Math.floor(((c + 1) / cols) * (f1 - f0));
+      let m = 0;
+      for (let i = a; i < Math.max(a + 1, b); i += 1) {
+        const v = Math.abs(peaks[i] ?? 0);
+        if (v > m) m = v;
+      }
+      amps.push(m);
+      if (m > mx) mx = m;
+    }
+    if (mx <= 0) mx = 1;
+    const top = [];
+    const bot = [];
+    for (let c = 0; c < cols; c += 1) {
+      const x = (c / (cols - 1)) * 100;
+      const h = (amps[c] / mx) * 47;
+      top.push(`${x.toFixed(2)},${(50 - h).toFixed(2)}`);
+      bot.push(`${x.toFixed(2)},${(50 + h).toFixed(2)}`);
+    }
+    const d = `M${top.join('L')}L${bot.reverse().join('L')}Z`;
+    const beatMs = Array.isArray(beats) ? beats : (beats?.beatsMs || []);
+    const tickX = beatMs
+      .filter((b) => b >= viewStart && b <= viewEnd)
+      .map((b) => ((b - viewStart) / viewSpan) * 100);
+    return { d, tickX };
+  }, [hasAudio, waveform, beats, viewStart, viewEnd, viewSpan]);
+
+  useEffect(() => {
+    const canvas = specRef.current;
+    if (!canvas || !hasSpectro) return;
+    const { cells, nMels, nFrames } = spectrogram;
+    const hop = spectrogram.hopMs || 10;
+    const f0 = Math.max(0, Math.floor(viewStart / hop));
+    const f1 = Math.min(nFrames, Math.ceil(viewEnd / hop));
+    const frames = Math.max(1, f1 - f0);
+    // Cap the canvas width — one column per frame overflows the browser's
+    // max canvas dimension on long tracks (a 92-min file at hop=23ms is
+    // ~240k frames vs the ~65535px limit) and the canvas silently fails to
+    // allocate, leaving a blank lane. We never need more columns than the
+    // lane's pixels, so max-pool frames into MAX_SPECTRO_COLS columns.
+    const vw = Math.min(frames, MAX_SPECTRO_COLS);
+    canvas.width = vw;
+    canvas.height = nMels;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(vw, nMels);
+    const data = img.data;
+    for (let t = 0; t < vw; t += 1) {
+      const rel0 = Math.floor((t / vw) * frames);
+      const rel1 = Math.max(rel0 + 1, Math.floor(((t + 1) / vw) * frames));
+      const a = f0 + rel0;
+      const b = f0 + rel1;
+      for (let bin = 0; bin < nMels; bin += 1) {
+        let m = 0;
+        for (let fr = a; fr < b; fr += 1) {
+          const v = cells[fr * nMels + bin] ?? 0;
+          if (v > m) m = v;
+        }
+        const [r, g, bl] = magmaRGB(m / 255);
+        const dr = nMels - 1 - bin;
+        const px = (dr * vw + t) * 4;
+        data[px] = r; data[px + 1] = g; data[px + 2] = bl; data[px + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }, [hasSpectro, spectrogram, viewStart, viewEnd]);
 
   // ── Gestures ──────────────────────────────────────────────────────
   // Wheel zoom: always pivots on the **active chapter's center**, not
@@ -220,7 +337,7 @@ export function ChapterRibbon({
     );
   }
 
-  const bandsHeight = height - xAxisPx;
+  const bandsHeight = lanesBandsHeight;
   const xTicks = useMemo(
     () => (showAxes ? buildXTicks(viewStart, viewEnd, pxWidth) : []),
     [showAxes, viewStart, viewEnd, pxWidth],
@@ -230,7 +347,10 @@ export function ChapterRibbon({
     <div
       ref={wrapRef}
       style={{
-        position: 'relative', height, width: '100%',
+        position: 'relative',
+        height: fill ? '100%' : height,
+        minHeight: fill ? height : undefined,
+        width: '100%',
         background: 'var(--bg)', border: '1px solid var(--border)',
         borderRadius: 8, overflow: 'hidden',
         userSelect: 'none',
@@ -240,7 +360,7 @@ export function ChapterRibbon({
           top=100 (max) and bottom=0 (rest), matching the funscript
           convention used by Sparkline inside each band. Suppressed
           when showAxes is false (narrow-chrome use). */}
-      {showAxes && <YAxis height={bandsHeight} />}
+      {showAxes && <YAxis height={laneRects.bands.h} />}
 
       {/* Plot area: bands above, X axis below (X axis hidden when
           showAxes is false). Wheel attaches here so the gutter doesn't
@@ -250,12 +370,12 @@ export function ChapterRibbon({
         style={{
           position: 'absolute',
           left: yAxisPx, right: 0, top: 0,
-          height,
+          height: fill ? '100%' : height,
         }}
         title={zoomable ? 'Wheel to zoom · click a band to focus' : 'Click a band to focus'}
       >
-        {/* Bands */}
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: bandsHeight, overflow: 'hidden' }}>
+        {/* Bands — top sub-lane (full bandsHeight when no ref lanes). */}
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: laneRects.bands.h, overflow: 'hidden' }}>
           {sortedBands.map((band) => {
             const leftPx = xFor(band.at_ms);
             const rightPx = xFor(band.end_ms);
@@ -278,28 +398,54 @@ export function ChapterRibbon({
             );
           })}
 
-          {/* Playhead baton. Optional — only renders when the consumer
-              passes `currentMs` and the playhead is inside the current
-              viewport. Off-viewport positions render nothing (rather
-              than clamping to the edge, which would lie about where
-              the playhead actually is). The earlier "no cursor" stance
-              was reversed once the MediaViewer became the master clock —
-              with a real video clock, the ribbon is the natural place
-              to show where in the story we are. */}
-          {Number.isFinite(currentMs) && currentMs >= viewStart && currentMs <= viewEnd && (
-            <div style={{
-              position: 'absolute',
-              top: 0, bottom: 0,
-              left: xFor(currentMs),
-              width: 2,
-              transform: 'translateX(-1px)',
-              background: 'rgba(255,255,255,0.9)',
-              boxShadow: '0 0 6px rgba(255,255,255,0.5)',
-              pointerEvents: 'none',
-              zIndex: 5,
-            }} />
-          )}
         </div>
+
+        {/* Audio lane — centered waveform (0..100 viewBox, stretched) + beat
+            ticks, windowed to the zoom view. */}
+        {audioLane && laneRects.audio && (
+          <div style={{
+            position: 'absolute', left: 0, right: 0,
+            top: laneRects.audio.top, height: laneRects.audio.h,
+            borderTop: '1px solid rgba(255,255,255,0.06)', pointerEvents: 'none',
+          }}>
+            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none"
+                 style={{ display: 'block' }}>
+              {audioLane.tickX.map((x, i) => (
+                <line key={i} x1={x} x2={x} y1={4} y2={96}
+                      stroke="rgba(255,255,255,0.16)" strokeWidth={0.4} />
+              ))}
+              <path d={audioLane.d} fill="rgba(120,180,255,0.45)"
+                    stroke="rgba(160,205,255,0.85)" strokeWidth={0.3} />
+            </svg>
+          </div>
+        )}
+
+        {/* Spectro lane — magma canvas, CSS-stretched across the lane. */}
+        {hasSpectro && laneRects.spectro && (
+          <div style={{
+            position: 'absolute', left: 0, right: 0,
+            top: laneRects.spectro.top, height: laneRects.spectro.h,
+            borderTop: '1px solid rgba(255,255,255,0.06)', pointerEvents: 'none',
+          }}>
+            <canvas ref={specRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+          </div>
+        )}
+
+        {/* Playhead baton — spans all sub-lanes (bands + audio + spectro).
+            Only renders when inside the current viewport. */}
+        {Number.isFinite(currentMs) && currentMs >= viewStart && currentMs <= viewEnd && (
+          <div style={{
+            position: 'absolute',
+            top: 0, height: bandsHeight,
+            left: xFor(currentMs),
+            width: 2,
+            transform: 'translateX(-1px)',
+            background: 'rgba(255,255,255,0.9)',
+            boxShadow: '0 0 6px rgba(255,255,255,0.5)',
+            pointerEvents: 'none',
+            zIndex: 5,
+          }} />
+        )}
 
         {/* X axis */}
         <XAxis ticks={xTicks} top={bandsHeight} height={X_AXIS_PX} />

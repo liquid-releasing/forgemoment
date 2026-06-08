@@ -122,37 +122,49 @@ export function TrackStack({
   const xToMs = (x) => start + ((x - PAD_X) / plotW) * dur;
   const laneOf = (kind) => layout.rows.find((r) => r.kind === kind);
 
-  // Funscript lane, scoped + decimated to ~plot width. Returns the solid
-  // path `d` plus per-point screen coords + velocities so the velocity
-  // colorMode can stroke each segment through the canonical speed colormap
-  // (same blue→red map as the ChapterRibbon / FunscriptChart).
+  // Funscript lane, binned per pixel column (NOT decimated). Each bin keeps
+  // the stroke envelope (min/max pos) for the bar height and the PEAK velocity
+  // measured from RAW consecutive actions for its color. Decimating first and
+  // measuring velocity between the sampled points (the old approach) aliased
+  // long, dense chapters into a low, slow-looking blue line — the bin keeps
+  // both the full 0-100 envelope and the true stroke speed, matching the
+  // FunscriptChart / ChapterRibbon heatmap. Returns per-bin bars + a max-pos
+  // envelope path `d` for solid mode.
   const fun = useMemo(() => {
     const row = laneOf('funscript');
-    if (!row || !actions.length) return null;
+    if (!row || !actions.length || dur <= 0) return null;
     const inWin = actions.filter((a) => a.at >= start && a.at <= end);
     const src = inWin.length > 1 ? inWin : actions;
-    const target = Math.min(plotW, 1500);
-    const stride = Math.max(1, Math.floor(src.length / target));
-    const pts = [];
-    for (let i = 0; i < src.length; i += stride) {
-      const a = src[i];
-      pts.push({ x: xFor(a.at), y: row.y + (1 - a.pos / 100) * row.h, at: a.at, pos: a.pos });
-    }
-    const last = src[src.length - 1];
-    if (last) pts.push({ x: xFor(last.at), y: row.y + (1 - last.pos / 100) * row.h, at: last.at, pos: last.pos });
-    const vels = pts.map((p, i) => {
-      if (i === 0) return 0;
-      const dt = Math.max(1, p.at - pts[i - 1].at);
-      return Math.abs(p.pos - pts[i - 1].pos) / dt;
-    });
-    if (vels.length > 1) vels[0] = vels[1];
+    const nBins = Math.max(1, Math.round(plotW));
+    const bins = new Array(nBins);
     let maxVel = 0;
-    for (const v of vels) if (v > maxVel) maxVel = v;
+    for (let i = 0; i < src.length; i++) {
+      const a = src[i];
+      const b = Math.min(nBins - 1, Math.max(0, Math.floor(((a.at - start) / dur) * nBins)));
+      let bin = bins[b];
+      if (!bin) bin = bins[b] = { min: a.pos, max: a.pos, vel: 0 };
+      if (a.pos < bin.min) bin.min = a.pos;
+      if (a.pos > bin.max) bin.max = a.pos;
+      if (i > 0) {
+        const dt = Math.max(1, a.at - src[i - 1].at);
+        const v = Math.abs(a.pos - src[i - 1].pos) / dt;
+        if (v > bin.vel) bin.vel = v;
+        if (v > maxVel) maxVel = v;
+      }
+    }
     if (maxVel === 0) maxVel = 1;
-    const d = pts
-      .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+    const yOf = (pos) => row.y + (1 - pos / 100) * row.h;
+    const bars = [];
+    for (let b = 0; b < nBins; b++) {
+      const bin = bins[b];
+      if (!bin) continue;
+      const x = xFor(start + ((b + 0.5) / nBins) * dur);
+      bars.push({ x, yMax: yOf(bin.max), yMin: yOf(bin.min), vel: bin.vel });
+    }
+    const d = bars
+      .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.yMax.toFixed(1)}`)
       .join('');
-    return { pts, vels, maxVel, d };
+    return { bars, maxVel, d };
   }, [actions, start, end, plotW, layout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Events overlapping the window, greedily packed into `eventRows`.
@@ -342,17 +354,13 @@ export function TrackStack({
         {/* Funscript lane — full-strength position line. Velocity mode
             strokes each segment by stroke speed (blue→red); solid mode is
             one path in funscriptColor. */}
-        {fun && funscriptColorMode === 'velocity' && fun.pts.length > 1 && (
+        {fun && funscriptColorMode === 'velocity' && fun.bars.length > 0 && (
           <g style={{ pointerEvents: 'none' }}>
-            {fun.pts.slice(1).map((p, i) => {
-              const prev = fun.pts[i];
-              const segColor = interpolateColorStops(VELOCITY_COLOR_STOPS, fun.vels[i + 1] / fun.maxVel);
-              return (
-                <line key={i} x1={prev.x} y1={prev.y} x2={p.x} y2={p.y}
-                      stroke={segColor} strokeWidth={1.25}
-                      vectorEffect="non-scaling-stroke" />
-              );
-            })}
+            {fun.bars.map((p, i) => (
+              <line key={i} x1={p.x} x2={p.x} y1={p.yMax} y2={Math.max(p.yMax + 1, p.yMin)}
+                    stroke={interpolateColorStops(VELOCITY_COLOR_STOPS, p.vel / fun.maxVel)}
+                    strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            ))}
           </g>
         )}
         {fun && funscriptColorMode !== 'velocity' && fun.d && (

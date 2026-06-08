@@ -135,51 +135,48 @@ export function TrackStack({
     if (!row || !actions.length || dur <= 0) return null;
     const inWin = actions.filter((a) => a.at >= start && a.at <= end);
     const src = inWin.length > 1 ? inWin : actions;
-    const nBins = Math.max(1, Math.round(plotW));
-    const bins = new Array(nBins);
-    let maxVel = 0;
-    for (let i = 0; i < src.length; i++) {
-      const a = src[i];
-      const b = Math.min(nBins - 1, Math.max(0, Math.floor(((a.at - start) / dur) * nBins)));
-      let bin = bins[b];
-      if (!bin) bin = bins[b] = { min: a.pos, max: a.pos, vel: 0 };
-      if (a.pos < bin.min) bin.min = a.pos;
-      if (a.pos > bin.max) bin.max = a.pos;
-      if (i > 0) {
-        const dt = Math.max(1, a.at - src[i - 1].at);
-        const v = Math.abs(a.pos - src[i - 1].pos) / dt;
-        if (v > bin.vel) bin.vel = v;
-        if (v > maxVel) maxVel = v;
-      }
-    }
-    if (maxVel === 0) maxVel = 1;
+    const n = src.length;
     const yOf = (pos) => row.y + (1 - pos / 100) * row.h;
-    const bars = [];
-    for (let b = 0; b < nBins; b++) {
-      const bin = bins[b];
-      if (!bin) continue;
-      const x = xFor(start + ((b + 0.5) / nBins) * dur);
-      bars.push({ x, yMax: yOf(bin.max), yMin: yOf(bin.min), vel: bin.vel });
+    // Draw a CONNECTED polyline through every action (the canonical
+    // Charts.Sparkline model), colored per-segment by |Δpos/Δt| normalized
+    // to the window max — so the Events lane matches the Stanzas / Chapters
+    // heatmap exactly. The old approach binned per-pixel and drew min→max
+    // envelope BARS; that collapsed to a 1px dot whenever a chapter had
+    // fewer actions than pixels (≤1 action/bin → min==max), which is why
+    // sparser chapters (ch1/ch5/ch12) looked empty/blue while dense ones
+    // (ch10/ch13) filled. A connected polyline shows real motion at any
+    // density. Segments are still bucketed into ~16 velocity-colored
+    // <path>s (not one <line> per segment) to keep the SVG node count low —
+    // ~1300 sibling <line>s overflowed React Fast Refresh's per-sibling
+    // recursion (scheduleFibersWithFamiliesRecursively → stack overflow) on
+    // HMR and reconcile slowly.
+    let maxVel = 0;
+    const vels = new Array(n);
+    vels[0] = 0;
+    for (let i = 1; i < n; i++) {
+      const dt = Math.max(1, src[i].at - src[i - 1].at);
+      const v = Math.abs(src[i].pos - src[i - 1].pos) / dt;
+      vels[i] = v;
+      if (v > maxVel) maxVel = v;
     }
-    // Bucket the per-bin bars by velocity into a few colored PATHS rather than
-    // one <line> per bin. ~1300 sibling SVG nodes blew React Fast Refresh's
-    // per-sibling recursion (scheduleFibersWithFamiliesRecursively → stack
-    // overflow on HMR) and is slow to reconcile; ~16 paths render identically.
+    vels[0] = vels[1] ?? 0;
+    if (maxVel === 0) maxVel = 1;
     const NB = 16;
     const bucketD = new Array(NB).fill('');
-    for (const p of bars) {
-      const t = Math.max(0, Math.min(1, p.vel / maxVel));
+    for (let i = 1; i < n; i++) {
+      const x1 = xFor(src[i - 1].at), y1 = yOf(src[i - 1].pos);
+      const x2 = xFor(src[i].at), y2 = yOf(src[i].pos);
+      const t = Math.max(0, Math.min(1, vels[i] / maxVel));
       const bi = Math.min(NB - 1, Math.floor(t * NB));
-      const y2 = Math.max(p.yMax + 1, p.yMin);
-      bucketD[bi] += `M${p.x.toFixed(1)},${p.yMax.toFixed(1)}L${p.x.toFixed(1)},${y2.toFixed(1)}`;
+      bucketD[bi] += `M${x1.toFixed(1)},${y1.toFixed(1)}L${x2.toFixed(1)},${y2.toFixed(1)}`;
     }
     const buckets = bucketD
       .map((dd, bi) => (dd ? { d: dd, color: interpolateColorStops(VELOCITY_COLOR_STOPS, (bi + 0.5) / NB) } : null))
       .filter(Boolean);
-    const d = bars
-      .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.yMax.toFixed(1)}`)
+    const d = src
+      .map((a, i) => `${i === 0 ? 'M' : 'L'}${xFor(a.at).toFixed(1)},${yOf(a.pos).toFixed(1)}`)
       .join('');
-    return { bars, maxVel, d, buckets };
+    return { maxVel, d, buckets };
   }, [actions, start, end, plotW, layout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Events overlapping the window, greedily packed into `eventRows`.
@@ -372,8 +369,8 @@ export function TrackStack({
         {fun && funscriptColorMode === 'velocity' && fun.buckets?.length > 0 && (
           <g style={{ pointerEvents: 'none' }}>
             {fun.buckets.map((bk, i) => (
-              <path key={i} d={bk.d} stroke={bk.color} strokeWidth={1} fill="none"
-                    vectorEffect="non-scaling-stroke" />
+              <path key={i} d={bk.d} stroke={bk.color} strokeWidth={1.4} fill="none"
+                    strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
             ))}
           </g>
         )}

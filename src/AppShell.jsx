@@ -524,7 +524,14 @@ export function AcceptBar({
             color: 'var(--text)', fontSize: 12.5,
           }}>
             <Icon name="activity" size={14} style={{ color: 'var(--accent-2, #ff7b7b)' }} />
-            <span style={{ flex: 1 }}>{busy.message || 'Working…'}</span>
+            {/* Header: explicit message wins; else name the running step (so a
+                stepped op reads "Detecting cycles…" not a bare "Working…");
+                else a generic analysis label; "Working…" only as last resort. */}
+            <span style={{ flex: 1 }}>{
+              busy.message
+              || (Array.isArray(busy.steps) && busy.steps.find((s) => s.status === 'running')?.label)
+              || (Array.isArray(busy.steps) && busy.steps.length ? 'Analyzing…' : 'Working…')
+            }</span>
             {typeof busy.fraction === 'number' && (
               <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                 {Math.round(Math.max(0, Math.min(1, busy.fraction)) * 100)}%

@@ -455,6 +455,11 @@ export function AcceptBar({
   gate,
   ready,
   onClearError,
+  // hideActions: drop the Reset + primary buttons but keep the bar (summary +
+  // busy/error/progress banner). For terminal tabs that own their own action
+  // button elsewhere (e.g. Export's in-tab "Export →"), so the footer doesn't
+  // show a dead duplicate that does nothing.
+  hideActions = false,
 }) {
   const disabled = Boolean(error) || Boolean(busy) || Boolean(gate);
   // Icon precedence: accepted (post-action success) > gate (blocker) >
@@ -620,15 +625,19 @@ export function AcceptBar({
           )}
         </div>
         {accepted && <Pill tone="success" dot>Accepted</Pill>}
-        <Button kind="ghost" size="sm" onClick={onReset}>Reset</Button>
-        <Button
-          kind={accepted ? 'secondary' : 'primary'}
-          icon={accepted ? 'rotate-ccw' : 'check'}
-          onClick={onAccept}
-          disabled={disabled}
-        >
-          {accepted ? 'Re-accept' : primaryLabel}
-        </Button>
+        {!hideActions && (
+          <>
+            <Button kind="ghost" size="sm" onClick={onReset}>Reset</Button>
+            <Button
+              kind={accepted ? 'secondary' : 'primary'}
+              icon={accepted ? 'rotate-ccw' : 'check'}
+              onClick={onAccept}
+              disabled={disabled}
+            >
+              {accepted ? 'Re-accept' : primaryLabel}
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

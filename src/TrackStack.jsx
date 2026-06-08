@@ -161,10 +161,25 @@ export function TrackStack({
       const x = xFor(start + ((b + 0.5) / nBins) * dur);
       bars.push({ x, yMax: yOf(bin.max), yMin: yOf(bin.min), vel: bin.vel });
     }
+    // Bucket the per-bin bars by velocity into a few colored PATHS rather than
+    // one <line> per bin. ~1300 sibling SVG nodes blew React Fast Refresh's
+    // per-sibling recursion (scheduleFibersWithFamiliesRecursively → stack
+    // overflow on HMR) and is slow to reconcile; ~16 paths render identically.
+    const NB = 16;
+    const bucketD = new Array(NB).fill('');
+    for (const p of bars) {
+      const t = Math.max(0, Math.min(1, p.vel / maxVel));
+      const bi = Math.min(NB - 1, Math.floor(t * NB));
+      const y2 = Math.max(p.yMax + 1, p.yMin);
+      bucketD[bi] += `M${p.x.toFixed(1)},${p.yMax.toFixed(1)}L${p.x.toFixed(1)},${y2.toFixed(1)}`;
+    }
+    const buckets = bucketD
+      .map((dd, bi) => (dd ? { d: dd, color: interpolateColorStops(VELOCITY_COLOR_STOPS, (bi + 0.5) / NB) } : null))
+      .filter(Boolean);
     const d = bars
       .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.yMax.toFixed(1)}`)
       .join('');
-    return { bars, maxVel, d };
+    return { bars, maxVel, d, buckets };
   }, [actions, start, end, plotW, layout]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Events overlapping the window, greedily packed into `eventRows`.
@@ -354,12 +369,11 @@ export function TrackStack({
         {/* Funscript lane — full-strength position line. Velocity mode
             strokes each segment by stroke speed (blue→red); solid mode is
             one path in funscriptColor. */}
-        {fun && funscriptColorMode === 'velocity' && fun.bars.length > 0 && (
+        {fun && funscriptColorMode === 'velocity' && fun.buckets?.length > 0 && (
           <g style={{ pointerEvents: 'none' }}>
-            {fun.bars.map((p, i) => (
-              <line key={i} x1={p.x} x2={p.x} y1={p.yMax} y2={Math.max(p.yMax + 1, p.yMin)}
-                    stroke={interpolateColorStops(VELOCITY_COLOR_STOPS, p.vel / fun.maxVel)}
-                    strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            {fun.buckets.map((bk, i) => (
+              <path key={i} d={bk.d} stroke={bk.color} strokeWidth={1} fill="none"
+                    vectorEffect="non-scaling-stroke" />
             ))}
           </g>
         )}

@@ -22,7 +22,10 @@ export function useNativeWheel(elementRef, handler) {
   useEffect(() => {
     const el = elementRef.current;
     if (!el) return undefined;
-    const listener = (e) => handlerRef.current(e);
+    const listener = (e) => {
+      if (!e.cancelable) return;
+      handlerRef.current(e);
+    };
     el.addEventListener('wheel', listener, { passive: false });
     return () => el.removeEventListener('wheel', listener);
   }, [elementRef]);

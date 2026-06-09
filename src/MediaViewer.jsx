@@ -103,6 +103,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Segmented } from './primitives.jsx';
 import { Sparkline } from './Charts.jsx';
+import { useNativeWheel } from './hooks/useNativeWheel.js';
 
 // Haptic mode removed 2026-05-19 — placeholder-only, no real signal to
 // show. Funscript mode covers the "what's about to fire on the device"
@@ -672,11 +673,16 @@ export function MediaViewer({
   // viewer is a media surface, not a scroll target. No zoom action
   // here; just block the bubble. (The chart panels under the viewer
   // own their own wheel-zoom; this is only for the media surface.)
-  const handleWheelAbsorb = (e) => { e.preventDefault(); };
+  //
+  // Bound via useNativeWheel (non-passive addEventListener) — React's
+  // onWheel is passive, so e.preventDefault() there silently no-ops and
+  // the page scrolls anyway. See [[feedback_react_wheel_passive]].
+  const rootRef = useRef(null);
+  useNativeWheel(rootRef, (e) => { e.preventDefault(); });
 
   return (
     <div
-      onWheel={handleWheelAbsorb}
+      ref={rootRef}
       style={{
       width, height, flexShrink: 0,
       background: 'var(--surface)',

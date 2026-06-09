@@ -627,7 +627,7 @@ export function AcceptBar({
         {accepted && <Pill tone="success" dot>Accepted</Pill>}
         {!hideActions && (
           <>
-            <Button kind="ghost" size="sm" onClick={onReset}>Reset</Button>
+            {onReset && <Button kind="ghost" size="sm" onClick={onReset}>Reset</Button>}
             <Button
               kind={accepted ? 'secondary' : 'primary'}
               icon={accepted ? 'rotate-ccw' : 'check'}

@@ -430,6 +430,12 @@ export function StatusBar({ synced = true, scope, chainFile, version }) {
 export function AcceptBar({
   summary, chainFile, accepted, onAccept, onReset,
   primaryLabel = 'Accept and chain',
+  // Optional SECONDARY action, rendered left of the primary as a quiet
+  // (non-highlighted) button — for tabs that offer a fork rather than a
+  // single commit (e.g. Project: "Generate new" / "Edit this"; Generate:
+  // "Continue with this" / "Keep the original"). Omit for the usual
+  // single-action accept-and-chain.
+  secondaryLabel, onSecondary,
   // Footer-level error + progress + gate. Surface issues, long-running
   // ops, and chain-blockers where the user is always looking (the
   // AcceptBar is sticky-bottom). Each disables the primary Accept
@@ -628,6 +634,11 @@ export function AcceptBar({
         {!hideActions && (
           <>
             {onReset && <Button kind="ghost" size="sm" onClick={onReset}>Reset</Button>}
+            {secondaryLabel && onSecondary && (
+              <Button kind="secondary" onClick={onSecondary} disabled={disabled}>
+                {secondaryLabel}
+              </Button>
+            )}
             <Button
               kind={accepted ? 'secondary' : 'primary'}
               icon={accepted ? 'rotate-ccw' : 'check'}

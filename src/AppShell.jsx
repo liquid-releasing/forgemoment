@@ -529,9 +529,20 @@ export function AcceptBar({
       )}
       {busy && (
         <div style={{ position: 'relative', borderBottom: '1px solid var(--border)' }}>
+          {/* Persistent context line — frames a streamed op so the rolling
+              stage labels read as "what THIS is" (e.g. "Recomputing phrases")
+              not a mysterious partial analysis. Untouched by the ff:progress
+              stream, which only updates message/steps. */}
+          {busy.title && (
+            <div style={{
+              padding: '8px 22px 0',
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
+              textTransform: 'uppercase', color: 'var(--text-dim)',
+            }}>{busy.title}</div>
+          )}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10,
-            padding: '8px 22px',
+            padding: busy.title ? '4px 22px 8px' : '8px 22px',
             color: 'var(--text)', fontSize: 12.5,
           }}>
             <Icon name="activity" size={14} style={{ color: 'var(--accent-2, #ff7b7b)' }} />

@@ -258,6 +258,14 @@ export function MediaViewer({
   // chapter-nav buttons.
   onPrevChapter,
   onNextChapter,
+  // Beats lane — a thin, persistent row of beat ticks UNDER the media
+  // surface (never on the video canvas). Decoupled from the player: ticks
+  // for the visible window draw once per (throttled) render, only the
+  // centered baton tracks the clock. Shows whenever `beats` is present;
+  // pass false to suppress (e.g. tabs with no musical context). Drawing
+  // beats onto the shared video canvas per-frame previously starved the
+  // decoder (jerky / unplayable) — this row is the safe alternative.
+  showBeatsLane = true,
 }) {
   // Resolve back-compat aliases. onMark wins if both are set; otherwise
   // fall back to the legacy name. Same for showMark / showCreateChapter.
@@ -874,6 +882,16 @@ export function MediaViewer({
           </div>
         )}
       </div>
+
+      {/* Beats lane — a persistent row of beat ticks under the media
+          surface (NOT on the video canvas). Decoupled consumer of the
+          throttled clock: the windowed ticks redraw once per render and a
+          centered baton sweeps. Plays in sync with the video without ever
+          touching its decoder. Windows the same 12s as the canvases,
+          clamped to the active scope (chapter slice or full track). */}
+      {beats && showBeatsLane && (
+        <BeatsLane beats={beats} currentMs={currentMs} range={batonRange} />
+      )}
 
       {/* Audio dashboard — live "what is this audio right now" readout.
           Renders only in Audio + Spectro modes (where the user is
@@ -1882,6 +1900,108 @@ function FunscriptBeatWindow({ actions, currentMs, batonRange, windowMs = 12000 
         pointerEvents: 'none',
         zIndex: 5,
       }} />
+    </div>
+  );
+}
+
+// ─── Beats lane ─────────────────────────────────────────────────────
+// A thin horizontal strip of beat ticks that plays in sync with the
+// media WITHOUT touching the video canvas. The earlier on-video beat
+// overlay redrew the whole frame canvas on every `timeupdate` and starved
+// Chromium's decoder (jerky playback / unplayable on long sources). This
+// lane is a sibling row instead: a read-only consumer of the already-
+// throttled `currentMs`. The windowed ticks are plain SVG drawn once per
+// (10 Hz) render — at ~120 BPM a 12 s window holds ~24 ticks, so the React
+// cost is trivial — and only the centered baton moves between renders.
+//
+// Same windowing model as FunscriptBeatWindow / SpectrogramCanvas: a 12 s
+// window centered on the playhead, clamped to the active scope (`range` =
+// chapter slice or full track). When the scope is shorter than the window
+// the whole scope shows and the baton sweeps across it.
+//
+// `beats` accepts either the rich object ({ bpm, beatsMs, downbeatsMs })
+// or a bare number[] of beat timestamps — mirrors the AnalysisPanels
+// normalization so every consumer's shape just works.
+function BeatsLane({ beats, currentMs, range, windowMs = 12000, height = 30 }) {
+  const beatList = Array.isArray(beats) ? beats : (beats?.beatsMs ?? null);
+  const downList = Array.isArray(beats) ? null : (beats?.downbeatsMs ?? null);
+  const bpm = (!Array.isArray(beats) && beats?.bpm > 0) ? Math.round(beats.bpm) : null;
+  const downSet = downList && downList.length ? new Set(downList) : null;
+
+  const trackStart = range?.start ?? 0;
+  const trackEnd = Math.max(trackStart + 1, range?.end ?? (beatList?.[beatList.length - 1] ?? 1));
+  const trackSpan = Math.max(1, trackEnd - trackStart);
+  const effWindowMs = Math.min(windowMs, trackSpan);
+  const half = effWindowMs / 2;
+
+  const playhead = Math.max(trackStart, Math.min(trackEnd, currentMs ?? trackStart));
+  let windowStart = playhead - half;
+  if (windowStart < trackStart) windowStart = trackStart;
+  if (windowStart + effWindowMs > trackEnd) windowStart = trackEnd - effWindowMs;
+  const windowEnd = windowStart + effWindowMs;
+  const batonXPct = ((playhead - windowStart) / effWindowMs) * 100;
+
+  // Ticks in the visible window (with a hair of overscan so edge ticks
+  // don't pop in/out).
+  const ticks = [];
+  if (beatList) {
+    for (let i = 0; i < beatList.length; i += 1) {
+      const t = beatList[i];
+      if (t < windowStart - 20 || t > windowEnd + 20) continue;
+      ticks.push({ x: ((t - windowStart) / effWindowMs) * 100, down: downSet ? downSet.has(t) : false });
+    }
+  }
+
+  return (
+    <div style={{
+      position: 'relative',
+      height,
+      background: 'var(--surface-2, #0b0e13)',
+      borderTop: '1px solid var(--border)',
+      overflow: 'hidden',
+    }}>
+      {/* center reference hairline so the eye reads "now" even between ticks */}
+      <div style={{
+        position: 'absolute', top: 0, bottom: 0, left: `${batonXPct}%`,
+        width: 2, transform: `translateX(${-2 * (batonXPct / 100)}px)`,
+        background: 'rgba(255,255,255,0.9)',
+        boxShadow: '0 0 6px rgba(255,255,255,0.5)',
+        pointerEvents: 'none', zIndex: 3,
+      }} />
+      <svg width="100%" height="100%" preserveAspectRatio="none"
+           viewBox="0 0 100 100" style={{ position: 'absolute', inset: 0 }}>
+        {ticks.map((tk, i) => (
+          <line
+            key={i}
+            x1={tk.x} x2={tk.x}
+            // Downbeats are taller + brighter; regular beats short + dim.
+            y1={tk.down ? 12 : 42} y2={tk.down ? 88 : 78}
+            stroke={tk.down ? 'rgba(120,190,255,0.95)' : 'rgba(255,255,255,0.45)'}
+            strokeWidth={tk.down ? 1.4 : 0.8}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+      </svg>
+      {/* BPM badge, quiet in the corner */}
+      {bpm != null && (
+        <div style={{
+          position: 'absolute', top: 4, left: 6,
+          fontSize: 9, fontWeight: 700, letterSpacing: '0.06em',
+          color: 'rgba(255,255,255,0.5)', pointerEvents: 'none',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          ♩ {bpm}
+        </div>
+      )}
+      {(!beatList || beatList.length === 0) && (
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          fontSize: 9.5, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.06em',
+        }}>
+          no beats
+        </div>
+      )}
     </div>
   );
 }

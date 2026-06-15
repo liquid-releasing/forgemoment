@@ -1928,9 +1928,19 @@ function BeatsLane({ beats, currentMs, range, windowMs = 12000, height = 30 }) {
   const bpm = (!Array.isArray(beats) && beats?.bpm > 0) ? Math.round(beats.bpm) : null;
   const downSet = downList && downList.length ? new Set(downList) : null;
 
-  const trackStart = range?.start ?? 0;
-  const trackEnd = Math.max(trackStart + 1, range?.end ?? (beatList?.[beatList.length - 1] ?? 1));
-  const trackSpan = Math.max(1, trackEnd - trackStart);
+  // Window against the FULL track, NOT the active chapter — same model as
+  // WaveformCanvas / SpectrogramCanvas (which window [0, durationMs]). The
+  // old code clamped the 12s window to the chapter `range`, so beats just
+  // outside a chapter edge got dropped and the baton pinned to the edge near
+  // chapter start/end (dogfood: "BeatsLane windowing dropping ticks"). beatsMs
+  // and currentMs are absolute, so a track-wide window scrolls continuously
+  // across chapter boundaries. lastBeat ≈ track end (beats span the whole
+  // track); fall back to range.end / currentMs so the window always covers the
+  // playhead even before beats load.
+  const lastBeat = beatList?.length ? beatList[beatList.length - 1] : 0;
+  const trackStart = 0;
+  const trackEnd = Math.max(1, lastBeat, range?.end ?? 0, currentMs ?? 0);
+  const trackSpan = trackEnd - trackStart;
   const effWindowMs = Math.min(windowMs, trackSpan);
   const half = effWindowMs / 2;
 

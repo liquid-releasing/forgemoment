@@ -77,10 +77,22 @@ async function walkDir(dirPath, projects, errors, fs, ancestorProjects) {
 
   for (const entry of entries) {
     if (entry.isDirectory) {
-      // `.<stem>.forge/` is sidecar storage — never recurse in.
-      // Other dotted dirs (`.git`, `.cache`, etc.) — also skip;
-      // the user's media never lives in hidden dirs.
-      if (entry.name.startsWith('.')) continue;
+      // Skip directories that are storage/output, not project sources:
+      //  • `.<stem>.forge/` and any dotted dir (`.git`, `.cache`, …) —
+      //    the user's media never lives in hidden dirs.
+      //  • FunscriptForge's OWN export outputs: `<stem>.output/` (loose,
+      //    device-organized folders) and `<stem>.forge` / `<stem>.forgeplay`
+      //    bundles. These hold produced artifacts with generic names
+      //    (stim.mp3, beat.mp3, motion.funscript) that would otherwise each
+      //    register as a standalone Library project and flood the list. A
+      //    bundle is something we made, not a source to re-import.
+      const lower = entry.name.toLowerCase();
+      if (
+        entry.name.startsWith('.')
+        || lower.endsWith('.output')
+        || lower.endsWith('.forge')
+        || lower.endsWith('.forgeplay')
+      ) continue;
       subdirs.push(fs.join(dirPath, entry.name));
       continue;
     }

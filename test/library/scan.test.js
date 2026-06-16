@@ -318,6 +318,24 @@ describe('scanRoot — traversal rules', () => {
     expect(result.projects.length).toBe(1);
     expect(result.projects[0].mediaPath).toBe('/lib/a.mp4');
   });
+
+  it('skips FunscriptForge export outputs (<stem>.output/ + .forge/.forgeplay bundles)', async () => {
+    const fs = new InMemoryFs({
+      '/lib/Scene.mp4': '',
+      // Loose export: device-organized folders with GENERIC artifact names
+      // (no stem) — must NOT each become a standalone Library project.
+      '/lib/Scene.output/E-Stim/stim.mp3': '',
+      '/lib/Scene.output/E-Stim/stim-prostate.mp3': '',
+      '/lib/Scene.output/audio/beat.mp3': '',
+      '/lib/Scene.output/Strokers/motion.funscript': '',
+      // Bundle dirs (if ever extracted to a folder) — also produced, not sources.
+      '/lib/Scene.forge/audio/stim.mp3': '',
+      '/lib/Other.forgeplay/audio/stim.mp3': '',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.length).toBe(1);
+    expect(result.projects[0].mediaPath).toBe('/lib/Scene.mp4');
+  });
 });
 
 describe('scanRoot — metadata + cached thumb', () => {

@@ -1561,8 +1561,37 @@ function SpectrogramCanvas({ spectrogram, currentMs, windowMs }) {
 // build-from-pitch-trajectory transform concept. Watch it scrub through
 // a track to validate whether the signal carries the musical-intensity
 // information before committing to the transform.
+// Live tempo at the playhead: median of the inter-beat gaps in a small window
+// straddling currentMs, so the BPM readout reflects the music HERE rather than
+// one whole-track average (which never changes as you play — the thing users
+// notice). Returns null when there aren't enough nearby beats or the result is
+// out of musical range (silence gaps / octave junk); callers fall back to the
+// sidecar's global bpm. beatsMs is sorted ascending.
+function localBpmAt(beatsMs, currentMs) {
+  if (!Array.isArray(beatsMs) || beatsMs.length < 2 || currentMs == null) return null;
+  let i = 0;
+  while (i < beatsMs.length && beatsMs[i] <= currentMs) i += 1;
+  const lo = Math.max(1, i - 4);
+  const hi = Math.min(beatsMs.length - 1, i + 4);
+  const gaps = [];
+  for (let k = lo; k <= hi; k += 1) {
+    const g = beatsMs[k] - beatsMs[k - 1];
+    if (g > 0) gaps.push(g);
+  }
+  if (!gaps.length) return null;
+  gaps.sort((a, b) => a - b);
+  const med = gaps[Math.floor(gaps.length / 2)];
+  if (!(med > 0)) return null;
+  const bpm = 60000 / med;
+  if (bpm < 20 || bpm > 400) return null;
+  return Math.round(bpm);
+}
+
 function AudioDashboard({ audioWaveform, spectrogram, beats, currentMs }) {
-  const bpm = beats?.bpm > 0 ? Math.round(beats.bpm) : null;
+  // Prefer the live local tempo at the playhead; fall back to the track-wide
+  // sidecar bpm when it can't be computed (sparse region / no beats yet).
+  const globalBpm = beats?.bpm > 0 ? Math.round(beats.bpm) : null;
+  const bpm = localBpmAt(beats?.beatsMs, currentMs) ?? globalBpm;
   const sparkRef = useRef(null);
 
   const peaks = audioWaveform?.peaks;
@@ -1741,7 +1770,7 @@ function AudioDashboard({ audioWaveform, spectrogram, beats, currentMs }) {
           </span>
         )}
         {bpm != null && (
-          <span style={{ flexShrink: 0 }} title="Music BPM (from beats sidecar)">
+          <span style={{ flexShrink: 0 }} title="Live tempo at the playhead (beats/min); track average where local beats are sparse">
             <span style={{ opacity: 0.6 }}>♩</span>{' '}
             <span style={{ color: 'rgba(255,255,255,0.95)' }}>{bpm}</span>
           </span>
@@ -1941,7 +1970,9 @@ function FunscriptBeatWindow({ actions, currentMs, batonRange, windowMs = 12000 
 function BeatsLane({ beats, currentMs, range, windowMs = 12000, height = 30 }) {
   const beatList = Array.isArray(beats) ? beats : (beats?.beatsMs ?? null);
   const downList = Array.isArray(beats) ? null : (beats?.downbeatsMs ?? null);
-  const bpm = (!Array.isArray(beats) && beats?.bpm > 0) ? Math.round(beats.bpm) : null;
+  const globalBpm = (!Array.isArray(beats) && beats?.bpm > 0) ? Math.round(beats.bpm) : null;
+  // Live tempo at the playhead, falling back to the track average.
+  const bpm = localBpmAt(beatList, currentMs) ?? globalBpm;
   const downSet = downList && downList.length ? new Set(downList) : null;
 
   // Window against the FULL track, NOT the active chapter — same model as
@@ -2008,14 +2039,18 @@ function BeatsLane({ beats, currentMs, range, windowMs = 12000, height = 30 }) {
           />
         ))}
       </svg>
-      {/* BPM badge, quiet in the corner */}
+      {/* Live-tempo badge, quiet in the corner (local rate at the playhead,
+          falling back to the track average where beats are sparse) */}
       {bpm != null && (
-        <div style={{
-          position: 'absolute', top: 4, left: 6,
-          fontSize: 9, fontWeight: 700, letterSpacing: '0.06em',
-          color: 'rgba(255,255,255,0.5)', pointerEvents: 'none',
-          fontVariantNumeric: 'tabular-nums',
-        }}>
+        <div
+          title="Live tempo at the playhead (beats/min)"
+          style={{
+            position: 'absolute', top: 4, left: 6,
+            fontSize: 9, fontWeight: 700, letterSpacing: '0.06em',
+            color: 'rgba(255,255,255,0.5)', pointerEvents: 'none',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
           ♩ {bpm}
         </div>
       )}

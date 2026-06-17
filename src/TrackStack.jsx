@@ -69,6 +69,16 @@ export function TrackStack({
   beats = null,                   // { beatsMs:[…] } | [ms] — ticks on the audio lane
   lanes = ['events', 'funscript'],// top→bottom order; only present data renders
   currentMs = null,
+  // Optional smooth-baton clock. When supplied, the baton is driven by a
+  // requestAnimationFrame loop reading this function (which returns the live
+  // absolute media-ms, e.g. video.currentTime*1000 + offset) instead of the
+  // `currentMs` prop. `currentMs` is throttled to ~4Hz on purpose (it gates
+  // React re-renders to protect the video decoder), which makes the baton
+  // step in ~250ms quanta and "rarely land on the beat". rAF positions the
+  // baton at the real 60fps clock via a direct DOM write — no extra renders,
+  // so the beat ticks (exact, static) and the baton finally agree. Omit it
+  // and the baton falls back to the `currentMs` prop (unchanged behavior).
+  getLiveMs = null,
   baton = 'line',                 // 'line' | 'none'
   selectedEventId = null,
   onSeek,
@@ -80,6 +90,7 @@ export function TrackStack({
   funscriptColorMode = 'solid',   // 'solid' | 'velocity' (per-stroke speed map)
 }) {
   const wrapRef = useRef(null);
+  const batonRef = useRef(null);
   const [width, setWidth] = useState(900);
   useEffect(() => {
     if (!wrapRef.current) return undefined;
@@ -121,6 +132,33 @@ export function TrackStack({
   const xFor = (ms) => PAD_X + ((ms - start) / dur) * plotW;
   const xToMs = (x) => start + ((x - PAD_X) / plotW) * dur;
   const laneOf = (kind) => layout.rows.find((r) => r.kind === kind);
+
+  // Smooth baton: when a live-clock getter is supplied, drive the baton line
+  // imperatively at animation-frame rate from the real media clock. This is
+  // deliberately decoupled from React state so it costs zero re-renders — the
+  // throttled `currentMs` still drives every other visual. Without getLiveMs
+  // this effect no-ops and the JSX baton (from `currentMs`) is used instead.
+  useEffect(() => {
+    if (baton !== 'line' || typeof getLiveMs !== 'function') return undefined;
+    let raf = 0;
+    const tick = () => {
+      const el = batonRef.current;
+      if (el) {
+        const ms = getLiveMs();
+        if (ms != null && ms >= start && ms <= end) {
+          const x = PAD_X + ((ms - start) / dur) * plotW;
+          el.setAttribute('x1', x);
+          el.setAttribute('x2', x);
+          el.style.display = '';
+        } else {
+          el.style.display = 'none';
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [getLiveMs, baton, start, end, dur, plotW]);
 
   // Funscript lane, binned per pixel column (NOT decimated). Each bin keeps
   // the stroke envelope (min/max pos) for the bar height and the PEAK velocity
@@ -405,13 +443,20 @@ export function TrackStack({
           </text>
         ))}
 
-        {/* Baton — optional, full-height playhead line */}
-        {baton === 'line' && currentMs != null && currentMs >= start && currentMs <= end && (
+        {/* Baton — optional, full-height playhead line. With a getLiveMs
+            clock the line always exists (rAF drives its x + visibility);
+            otherwise it's the throttled currentMs-positioned line. */}
+        {baton === 'line' && getLiveMs ? (
+          <line ref={batonRef} x1={0} x2={0}
+                y1={0} y2={layout.rulerY}
+                stroke="var(--accent)" strokeWidth={1.5}
+                style={{ pointerEvents: 'none', display: 'none' }} />
+        ) : (baton === 'line' && currentMs != null && currentMs >= start && currentMs <= end && (
           <line x1={xFor(currentMs)} x2={xFor(currentMs)}
                 y1={0} y2={layout.rulerY}
                 stroke="var(--accent)" strokeWidth={1.5}
                 style={{ pointerEvents: 'none' }} />
-        )}
+        ))}
       </svg>
     </div>
   );

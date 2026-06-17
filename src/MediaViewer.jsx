@@ -100,7 +100,7 @@
 //                       currentMs back.
 //   width             number (px)                             default 240
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Segmented } from './primitives.jsx';
 import { Sparkline } from './Charts.jsx';
 import { useNativeWheel } from './hooks/useNativeWheel.js';
@@ -266,6 +266,12 @@ export function MediaViewer({
   // beats onto the shared video canvas per-frame previously starved the
   // decoder (jerky / unplayable) — this row is the safe alternative.
   showBeatsLane = true,
+  // Optional ref (object or callback) that receives the underlying <video>
+  // element. Lets a consumer read the real, un-throttled media clock for a
+  // smooth playhead (e.g. TrackStack's getLiveMs baton) without coupling to
+  // MediaViewer internals. The element is clip-relative when a chapter clip
+  // is playing — add videoSrcOffsetMs to get original-media ms.
+  videoElRef = null,
 }) {
   // Resolve back-compat aliases. onMark wins if both are set; otherwise
   // fall back to the legacy name. Same for showMark / showCreateChapter.
@@ -308,6 +314,16 @@ export function MediaViewer({
   // to the consumer's props so the viewer's chrome (play button, baton,
   // scrub, mode toggle, transport) drives real playback.
   const videoRef = useRef(null);
+  // Combined ref: keep the internal videoRef AND hand the element up to an
+  // optional consumer ref (videoElRef) so it can read the live media clock.
+  // useCallback keeps it stable so React doesn't detach/reattach each render.
+  const setVideoEl = useCallback((el) => {
+    videoRef.current = el;
+    if (videoElRef) {
+      if (typeof videoElRef === 'function') videoElRef(el);
+      else videoElRef.current = el;
+    }
+  }, [videoElRef]);
   // Mirror `isPlaying` into a ref so deferred-play handlers (below) can
   // read the *current* user intent without re-subscribing every render.
   const isPlayingRef = useRef(isPlaying);
@@ -748,7 +764,7 @@ export function MediaViewer({
             master audio source across all modes. */}
         {videoSrc && (
           <video
-            ref={videoRef}
+            ref={setVideoEl}
             src={videoSrc}
             // Intentionally unmuted — this is an authoring tool, the
             // user wants to hear the audio to align the funscript

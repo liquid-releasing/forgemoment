@@ -44,6 +44,11 @@ export { ChapterContextStrip } from './ChapterContextStrip.jsx';
 // Events lane takes generic spans; vocabulary is consumer-owned.
 export { TrackStack } from './TrackStack.jsx';
 
+// CaptureBar — mark a [begin, end] span from the playhead (the Events-tab
+// capture chassis). Vocabulary-free: knows nothing about events/cues, just
+// captures a span via callbacks. Also exports fmtClock/parseClock helpers.
+export { CaptureBar, fmtClock, parseClock } from './CaptureBar.jsx';
+
 // AppShell — TopBar, TabStrip, StatusBar, AcceptBar, ScopePicker,
 // TabBody, TabHeader, SectionLabel. FFP-specific data (FF_TABS,
 // FF_UTILITY_TABS, hardcoded scope picker / logo / help items) is

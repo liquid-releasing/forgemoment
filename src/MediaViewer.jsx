@@ -384,6 +384,21 @@ export function MediaViewer({
   // optional consumer ref (videoElRef) so it can read the live media clock.
   // useCallback keeps it stable so React doesn't detach/reattach each render.
   const setVideoEl = useCallback((el) => {
+    // GC the OUTGOING element when it detaches (chapter switch via the
+    // key=videoSrc below, or unmount). A single <video> that only swaps `src`
+    // does NOT make WebView2 promptly free the previous clip's decoded
+    // buffers — they linger until GC, and under memory pressure from a large
+    // clip the next allocation fails first (the "later/bigger chapters won't
+    // paint" bug, D30). Explicitly pausing + clearing src + load() tears the
+    // media pipeline down so the buffers are released now, not eventually.
+    if (!el && videoRef.current) {
+      try {
+        const prev = videoRef.current;
+        prev.pause();
+        prev.removeAttribute('src');
+        prev.load();
+      } catch { /* element already torn down */ }
+    }
     videoRef.current = el;
     if (videoElRef) {
       if (typeof videoElRef === 'function') videoElRef(el);
@@ -843,6 +858,14 @@ export function MediaViewer({
             master audio source across all modes. */}
         {videoSrc && (
           <video
+            // Key by the clip URL so each chapter gets a FRESH element and the
+            // outgoing one is removed from the DOM — the surest way to make
+            // WebView2 release the prior clip's video-decode memory (the
+            // setVideoEl detach handler flushes it on the way out). Same `src`
+            // across re-renders keeps the same element (no churn); only an
+            // actual clip change recreates it. Fixes cumulative memory
+            // accumulation across chapter switches (D30).
+            key={videoSrc}
             ref={setVideoEl}
             src={videoSrc}
             // Intentionally unmuted — this is an authoring tool, the

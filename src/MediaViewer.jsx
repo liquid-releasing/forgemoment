@@ -161,6 +161,44 @@ const MAGMA_LUT = (() => {
   return lut;
 })();
 
+// ── Beat-energy baton color ─────────────────────────────────────────
+// When the consumer opts into `batonColorByBeat`, the playhead is tinted by
+// the loudness of the beat it's sitting on: cool (blue) where the music is
+// quiet, hot (red) where it's loud — so the baton itself tells you the energy
+// of "this beat" as it lands on it.
+const DEFAULT_BATON = 'rgba(255,255,255,0.95)';
+
+// Energy 0..1 at a time, read straight from the audio peak envelope.
+function energyAtMs(peaks, hopMs, ms) {
+  if (!peaks || !peaks.length || !hopMs || ms == null) return null;
+  const i = Math.max(0, Math.min(peaks.length - 1, Math.round(ms / hopMs)));
+  return Math.max(0, Math.min(1, Math.abs(peaks[i] ?? 0)));
+}
+
+// Nearest beat timestamp to `ms` (binary search; beatList is sorted ascending).
+function nearestBeatMs(beatList, ms) {
+  if (!beatList || !beatList.length || ms == null) return ms;
+  if (ms <= beatList[0]) return beatList[0];
+  const last = beatList.length - 1;
+  if (ms >= beatList[last]) return beatList[last];
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (beatList[mid] <= ms) lo = mid; else hi = mid;
+  }
+  return (ms - beatList[lo] <= beatList[hi] - ms) ? beatList[lo] : beatList[hi];
+}
+
+// Energy → a full-rainbow baton color, visible at every level: violet (quiet)
+// → blue → cyan → green → yellow → orange → red (loud). Null energy falls back
+// to the plain white baton.
+function batonColorForEnergy(e) {
+  if (e == null) return DEFAULT_BATON;
+  const hue = 270 - Math.max(0, Math.min(1, e)) * 270; // 270 (violet) → 0 (red)
+  return `hsl(${Math.round(hue)}, 90%, 58%)`;
+}
+
 export function MediaViewer({
   audioWaveform,
   spectrogram,
@@ -185,6 +223,18 @@ export function MediaViewer({
   prevTitle = 'Previous chapter',
   showMark = true,
   showModeToggle = true,
+  // Tint the playhead by the energy of the beat it's on (cool=quiet, hot=loud)
+  // and widen it. Opt-in: the Events/Chapters editors keep the precise thin
+  // white baton for frame-accurate landing; the review Viewer turns this on.
+  batonColorByBeat = false,
+  batonWidth = 2,
+  // When true, drop modes that have no data to show instead of rendering a
+  // dead placeholder tab. Currently applies to Spectro (its live canvas needs
+  // raw mel cells, which only exist after a full analysis — an exported project
+  // ships only a static spectrogram PNG, which this canvas can't use). Opt-in
+  // so existing consumers (Events/Chapters, which always pass cells) are
+  // unaffected.
+  hideEmptySpectro = false,
   // Mode-toggle layout knobs. Used by the FunscriptForge Chapters tab to
   // place the toggle quietly in the top-left of the viewer (instead of the
   // default centered chip strip) and shrink it so the active mode reads
@@ -286,6 +336,22 @@ export function MediaViewer({
     if (modeProp === undefined) setInternalMode(next);
     onModeChange?.(next);
   };
+
+  // Mode chips, minus any the consumer asked to hide when empty. Spectro's live
+  // canvas needs raw mel cells; with `hideEmptySpectro` set and none present,
+  // drop the tab (and fall back to Audio if it was the active one).
+  const hasSpectroCells = !!(spectrogram && spectrogram.cells && spectrogram.cells.length > 0);
+  const modeOptions = useMemo(
+    () => (hideEmptySpectro && !hasSpectroCells
+      ? MODE_OPTIONS.filter((o) => o.value !== 'spectrogram')
+      : MODE_OPTIONS),
+    [hideEmptySpectro, hasSpectroCells],
+  );
+  useEffect(() => {
+    if (mode === 'spectrogram' && !modeOptions.some((o) => o.value === 'spectrogram')) {
+      handleModeChange('audio');
+    }
+  }, [mode, modeOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Playback speed — controlled when `speed` is supplied, else internal.
   // Applied to video.playbackRate (re-applied on src change since browsers
@@ -636,6 +702,19 @@ export function MediaViewer({
   const outOfScope = chapter && (rawBatonPos < 0 || rawBatonPos > 1);
   const outDirection = rawBatonPos > 1 ? 'after' : rawBatonPos < 0 ? 'before' : null;
 
+  // Baton tint — energy of the beat the playhead is on (opt-in). Re-derived per
+  // render (cheap: one binary search + one envelope read); the per-canvas
+  // batons read it via the batonColor prop.
+  const batonColor = (() => {
+    if (!batonColorByBeat) return DEFAULT_BATON;
+    const peaks = audioWaveform?.peaks;
+    const hop = audioWaveform?.hopMs
+      ?? (audioWaveform?.durationMs && peaks?.length ? audioWaveform.durationMs / peaks.length : null);
+    const beatList = Array.isArray(beats) ? beats : (beats?.beatsMs ?? null);
+    const at = nearestBeatMs(beatList, currentMs);
+    return batonColorForEnergy(energyAtMs(peaks, hop, at));
+  })();
+
   const stepFrame = (dir) => {
     // Frame jog is for precise inspection — pause first if playing so
     // the playhead doesn't blow past the new position on the next
@@ -731,7 +810,7 @@ export function MediaViewer({
             : 'center',
         }}>
           <Segmented
-            options={MODE_OPTIONS}
+            options={modeOptions}
             value={mode}
             onChange={handleModeChange}
             size={modeToggleSize}
@@ -794,6 +873,8 @@ export function MediaViewer({
                 waveform={audioWaveform}
                 spectrogram={spectrogram}
                 currentMs={currentMs}
+                batonColor={batonColor}
+                batonWidth={batonWidth}
               />
             : <AudioWavePlaceholder />
         )}
@@ -802,6 +883,8 @@ export function MediaViewer({
             ? <SpectrogramCanvas
                 spectrogram={spectrogram}
                 currentMs={currentMs}
+                batonColor={batonColor}
+                batonWidth={batonWidth}
               />
             : <SpectrogramPlaceholder />
         )}
@@ -811,6 +894,8 @@ export function MediaViewer({
                 actions={funscript.actions}
                 currentMs={currentMs}
                 batonRange={batonRange}
+                batonColor={batonColor}
+                batonWidth={batonWidth}
               />
             : <FunscriptPlaceholder />
         )}
@@ -906,7 +991,8 @@ export function MediaViewer({
           touching its decoder. Windows the same 12s as the canvases,
           clamped to the active scope (chapter slice or full track). */}
       {beats && showBeatsLane && (
-        <BeatsLane beats={beats} currentMs={currentMs} range={batonRange} />
+        <BeatsLane beats={beats} currentMs={currentMs} range={batonRange}
+                   batonColor={batonColor} batonWidth={batonWidth} />
       )}
 
       {/* Audio dashboard — live "what is this audio right now" readout.
@@ -1174,7 +1260,8 @@ function FunscriptPlaceholder() {
 // without an extra mode — you see WHERE the audio sits in addition to
 // HOW LOUD it is. Same DaVinci-style aesthetic. Falls back to solid
 // orange when the spectrogram sidecar isn't loaded.
-function WaveformCanvas({ waveform, spectrogram, currentMs, windowMs = 12000 }) {
+function WaveformCanvas({ waveform, spectrogram, currentMs, windowMs = 12000,
+                          batonColor = DEFAULT_BATON, batonWidth = 2 }) {
   const canvasRef = useRef(null);
 
   const peaks = waveform?.peaks;
@@ -1338,10 +1425,10 @@ function WaveformCanvas({ waveform, spectrogram, currentMs, windowMs = 12000 }) 
       <div style={{
         position: 'absolute', top: 0, bottom: 0,
         left: `${batonXPct}%`,
-        width: 2,
-        transform: `translateX(${-2 * (batonXPct / 100)}px)`,
-        background: 'rgba(255,255,255,0.95)',
-        boxShadow: '0 0 6px rgba(255,255,255,0.6)',
+        width: batonWidth,
+        transform: `translateX(${-batonWidth * (batonXPct / 100)}px)`,
+        background: batonColor,
+        boxShadow: `0 0 6px ${batonColor}`,
         pointerEvents: 'none',
         zIndex: 5,
       }} />
@@ -1386,7 +1473,8 @@ const SPEC_VIEW_PRESETS = {
   coarse: { windowMs: 60000, binStride: 2 },
 };
 
-function SpectrogramCanvas({ spectrogram, currentMs, windowMs }) {
+function SpectrogramCanvas({ spectrogram, currentMs, windowMs,
+                            batonColor = DEFAULT_BATON, batonWidth = 2 }) {
   const canvasRef = useRef(null);
   const [view, setView] = useState('fine');  // 'fine' | 'coarse'
   const preset = SPEC_VIEW_PRESETS[view] ?? SPEC_VIEW_PRESETS.fine;
@@ -1502,10 +1590,10 @@ function SpectrogramCanvas({ spectrogram, currentMs, windowMs }) {
       <div style={{
         position: 'absolute', top: 0, bottom: 0,
         left: `${batonXPct}%`,
-        width: 2,
-        transform: `translateX(${-2 * (batonXPct / 100)}px)`,
-        background: 'rgba(255,255,255,0.95)',
-        boxShadow: '0 0 6px rgba(255,255,255,0.6)',
+        width: batonWidth,
+        transform: `translateX(${-batonWidth * (batonXPct / 100)}px)`,
+        background: batonColor,
+        boxShadow: `0 0 6px ${batonColor}`,
         pointerEvents: 'none',
         zIndex: 5,
       }} />
@@ -1879,7 +1967,8 @@ function SpectrogramPlaceholder() {
 // Coordinate space: 100×100 viewBox like Sparkline. x = window-relative
 // time, y = inverted funscript position (pos=100 at top, pos=0 at
 // bottom — matches Charts.jsx convention).
-function FunscriptBeatWindow({ actions, currentMs, batonRange, windowMs = 12000 }) {
+function FunscriptBeatWindow({ actions, currentMs, batonRange, windowMs = 12000,
+                              batonColor = DEFAULT_BATON, batonWidth = 2 }) {
   if (!actions || actions.length === 0) return <FunscriptPlaceholder />;
 
   const trackStart = batonRange.start;
@@ -1938,10 +2027,10 @@ function FunscriptBeatWindow({ actions, currentMs, batonRange, windowMs = 12000 
         // (line at x=[0,2]). At right edge: shift by full width (line
         // at x=[w-2, w]). Linear interp between.
         left: `${batonXPct}%`,
-        width: 2,
-        transform: `translateX(${-2 * (batonXPct / 100)}px)`,
-        background: 'rgba(255,255,255,0.95)',
-        boxShadow: '0 0 6px rgba(255,255,255,0.6)',
+        width: batonWidth,
+        transform: `translateX(${-batonWidth * (batonXPct / 100)}px)`,
+        background: batonColor,
+        boxShadow: `0 0 6px ${batonColor}`,
         pointerEvents: 'none',
         zIndex: 5,
       }} />
@@ -1967,7 +2056,8 @@ function FunscriptBeatWindow({ actions, currentMs, batonRange, windowMs = 12000 
 // `beats` accepts either the rich object ({ bpm, beatsMs, downbeatsMs })
 // or a bare number[] of beat timestamps — mirrors the AnalysisPanels
 // normalization so every consumer's shape just works.
-function BeatsLane({ beats, currentMs, range, windowMs = 12000, height = 30 }) {
+function BeatsLane({ beats, currentMs, range, windowMs = 12000, height = 30,
+                    batonColor = DEFAULT_BATON, batonWidth = 2 }) {
   const beatList = Array.isArray(beats) ? beats : (beats?.beatsMs ?? null);
   const downList = Array.isArray(beats) ? null : (beats?.downbeatsMs ?? null);
   const globalBpm = (!Array.isArray(beats) && beats?.bpm > 0) ? Math.round(beats.bpm) : null;
@@ -2017,12 +2107,13 @@ function BeatsLane({ beats, currentMs, range, windowMs = 12000, height = 30 }) {
       borderTop: '1px solid var(--border)',
       overflow: 'hidden',
     }}>
-      {/* center reference hairline so the eye reads "now" even between ticks */}
+      {/* center reference hairline so the eye reads "now" even between ticks.
+          No glow here — in a 30px-tall bar the halo bleeds over the beat ticks;
+          just the clean colored line. */}
       <div style={{
         position: 'absolute', top: 0, bottom: 0, left: `${batonXPct}%`,
-        width: 2, transform: `translateX(${-2 * (batonXPct / 100)}px)`,
-        background: 'rgba(255,255,255,0.9)',
-        boxShadow: '0 0 6px rgba(255,255,255,0.5)',
+        width: batonWidth, transform: `translateX(${-batonWidth * (batonXPct / 100)}px)`,
+        background: batonColor,
         pointerEvents: 'none', zIndex: 3,
       }} />
       <svg width="100%" height="100%" preserveAspectRatio="none"

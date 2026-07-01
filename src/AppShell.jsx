@@ -652,7 +652,10 @@ export function AcceptBar({
             )}
             <Button
               kind={accepted ? 'secondary' : 'primary'}
-              icon={accepted ? 'rotate-ccw' : 'check'}
+              // No ✓ until the action is actually ready: a disabled primary
+              // (nothing selected / gated) shows the label alone — the check
+              // would imply "ready to commit" when it isn't.
+              icon={disabled ? undefined : (accepted ? 'rotate-ccw' : 'check')}
               onClick={onAccept}
               disabled={disabled}
             >

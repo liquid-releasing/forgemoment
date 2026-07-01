@@ -449,12 +449,12 @@ export function TrackStack({
         {baton === 'line' && getLiveMs ? (
           <line ref={batonRef} x1={0} x2={0}
                 y1={0} y2={layout.rulerY}
-                stroke="var(--accent)" strokeWidth={1.5}
+                stroke="rgba(255,255,255,0.9)" strokeWidth={1.5}
                 style={{ pointerEvents: 'none', display: 'none' }} />
         ) : (baton === 'line' && currentMs != null && currentMs >= start && currentMs <= end && (
           <line x1={xFor(currentMs)} x2={xFor(currentMs)}
                 y1={0} y2={layout.rulerY}
-                stroke="var(--accent)" strokeWidth={1.5}
+                stroke="rgba(255,255,255,0.9)" strokeWidth={1.5}
                 style={{ pointerEvents: 'none' }} />
         ))}
       </svg>

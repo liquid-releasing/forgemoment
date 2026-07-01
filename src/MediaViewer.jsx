@@ -227,7 +227,7 @@ export function MediaViewer({
   // and widen it. Opt-in: the Events/Chapters editors keep the precise thin
   // white baton for frame-accurate landing; the review Viewer turns this on.
   batonColorByBeat = false,
-  batonWidth = 2,
+  batonWidth = 4,
   // When true, drop modes that have no data to show instead of rendering a
   // dead placeholder tab. Currently applies to Spectro (its live canvas needs
   // raw mel cells, which only exist after a full analysis — an exported project

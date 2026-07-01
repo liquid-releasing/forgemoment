@@ -594,9 +594,13 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, w
         {currentMs != null && currentMs >= view.start && currentMs <= view.end && (
           <div style={{
             position: 'absolute',
-            left: xFor(currentMs) - 1, top: 0, bottom: 0,
-            width: 2, background: '#fff', opacity: 0.95,
-            boxShadow: '0 0 4px rgba(255,255,255,0.6)',
+            left: xFor(currentMs) - 2, top: 0, bottom: 0,
+            width: 4, background: 'rgba(255,255,255,0.95)', opacity: 1,
+            // No glow. The old 2px + white box-shadow blurred over the red
+            // velocity waveform into a reddish halo that read as "a white baton
+            // with a red margin". Solid 4px white matches TrackStack/ChannelStack/
+            // ChapterRibbon batons — clean over any waveform color.
+            boxShadow: 'none',
             pointerEvents: 'none',
             zIndex: 5,
           }} />

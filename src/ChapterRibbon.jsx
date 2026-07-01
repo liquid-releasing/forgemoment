@@ -449,10 +449,9 @@ export function ChapterRibbon({
             position: 'absolute',
             top: 0, height: bandsHeight,
             left: xFor(currentMs),
-            width: 2,
-            transform: 'translateX(-1px)',
+            width: 4,
+            transform: 'translateX(-2px)',
             background: 'rgba(255,255,255,0.9)',
-            boxShadow: '0 0 6px rgba(255,255,255,0.5)',
             pointerEvents: 'none',
             zIndex: 5,
           }} />

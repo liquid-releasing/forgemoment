@@ -58,6 +58,11 @@ export function TransformPanel({
   applyLabel = 'Apply',
   cancelLabel = 'Cancel',
   onApply, onCancel,
+  // Undo the last APPLIED transform — the "oops, I just applied, how do I fix
+  // it" loop. Rendered as a ghost button to the LEFT of Cancel; suppressed
+  // entirely when no onUndo is supplied so non-transform consumers are
+  // unchanged. `canUndo` disables it when the stack is empty.
+  onUndo, undoLabel = 'Undo', canUndo = false, undoTitle,
   // Affected-count chip rendered in the header (small Pill next to the
   // "Transform" eyebrow). Pass the number of units the apply will hit
   // (instances on the Patterns tab, phrases on Phrases). When null /
@@ -295,12 +300,22 @@ export function TransformPanel({
         )}
       </div>
 
-      {/* Apply bar — Cancel on the left, primary Apply on the right
-          (2:1 width ratio matches iter 08). */}
+      {/* Apply bar — Undo · Cancel on the left, primary Apply on the right.
+          Undo sits next to Cancel (user: "undo goes next to cancel") so the
+          oops-fix lives right where you Applied. */}
       <div style={{
         display: 'flex', gap: 8, padding: '12px 16px',
         background: 'var(--surface)', borderTop: '1px solid var(--border)',
       }}>
+        {onUndo && (
+          <Button
+            kind="ghost" size="sm" icon="rotate-ccw"
+            onClick={onUndo} disabled={!canUndo} title={undoTitle}
+            style={{ flex: 1 }}
+          >
+            {undoLabel}
+          </Button>
+        )}
         <Button kind="ghost" size="sm" onClick={onCancel} style={{ flex: 1 }}>
           {cancelLabel}
         </Button>

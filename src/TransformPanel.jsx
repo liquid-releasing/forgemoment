@@ -319,7 +319,19 @@ export function TransformPanel({
         <Button kind="ghost" size="sm" onClick={onCancel} style={{ flex: 1 }}>
           {cancelLabel}
         </Button>
-        <Button kind="primary" size="sm" icon="play" onClick={onApply} style={{ flex: 2 }}>
+        <Button
+          // NOT red: red is reserved for the footer's terminal Accept/chain.
+          // Apply is a frequent mid-edit action, so it uses the lighter
+          // secondary treatment to avoid competing with the footer.
+          kind="secondary" size="sm" icon="play"
+          onClick={onApply}
+          // Nothing selected → Apply is a no-op; disable it so the user isn't
+          // fooled into thinking an edit landed. Only gates when `affected` is
+          // a real number (multi-edit consumers); others are unaffected.
+          disabled={typeof affected === 'number' && affected === 0}
+          title={typeof affected === 'number' && affected === 0 ? 'Select a phrase to edit first' : undefined}
+          style={{ flex: 2 }}
+        >
           {applyLabel}
         </Button>
       </div>

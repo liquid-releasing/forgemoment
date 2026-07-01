@@ -75,6 +75,11 @@ export function ChapterContextStrip({
   // `height` as a fixed value. The grid cell must allow stretch.
   fill = false,
   height = 96,
+  // Velocity colormap denominator (p98 over the FULL track), shared with the
+  // Chapters FunscriptChart so a phrase renders the same color in both. Omit
+  // (0) and the Sparkline falls back to the local chapter max — which made a
+  // fast phrase divide by its own peak → ratio≈1 → a solid pure-red bar.
+  velocityMax = 0,
 }) {
   return (
     <div style={{
@@ -145,6 +150,7 @@ export function ChapterContextStrip({
             beats={beats}
             fill={fill}
             height={height}
+            velocityMax={velocityMax}
           />
           {media?.src && (
             <MediaViewer
@@ -191,7 +197,7 @@ const PAD_BOTTOM = 16;
 // `PAD_RIGHT`. Y-axis labels live in the outer left padding; nothing
 // else does. xFor returns coordinates *inside the plot area* — callers
 // stay agnostic of the outer padding.
-function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, waveform, spectrogram, beats, fill, height }) {
+function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, waveform, spectrogram, beats, fill, height, velocityMax = 0 }) {
   const wrapRef = useRef(null);
   const plotRef = useRef(null);
   const specRef = useRef(null);
@@ -449,6 +455,7 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, w
             start={view.start - chapter.at_ms}
             end={view.end - chapter.at_ms}
             colorMode="velocity"
+            maxVelocity={velocityMax || undefined}
             height="100%"
             filled
           />

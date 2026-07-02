@@ -436,6 +436,20 @@ export function AcceptBar({
   // "Continue with this" / "Keep the original"). Omit for the usual
   // single-action accept-and-chain.
   secondaryLabel, onSecondary,
+  // secondaryActions: an ARRAY of quiet white buttons rendered left of the
+  // primary — for tabs that offer more than one in-place action alongside the
+  // commit (e.g. Channels' two per-pass walks: "Character · accept & next" +
+  // "Mechanical · accept & next"). Each: { label, onClick, disabled?, title?,
+  // icon? }. Composes with (renders after) the single secondaryLabel if both
+  // are given.
+  secondaryActions,
+  // primaryTentative: render the PRIMARY as a quiet white (secondary-kind)
+  // button with NO ✓ — for a "keep going" step that isn't the terminal commit
+  // (e.g. a gated chapter tab still being walked: "Accept and next chapter").
+  // Red + ✓ is reserved for the real chain, which appears only once the tab's
+  // completion predicate is satisfied (every chapter visited). Ignored when
+  // `accepted` (that has its own Re-accept styling).
+  primaryTentative = false,
   // Footer-level error + progress + gate. Surface issues, long-running
   // ops, and chain-blockers where the user is always looking (the
   // AcceptBar is sticky-bottom). Each disables the primary Accept
@@ -650,12 +664,28 @@ export function AcceptBar({
                 {secondaryLabel}
               </Button>
             )}
+            {Array.isArray(secondaryActions) && secondaryActions.map((a, i) => (
+              <Button
+                key={a.key ?? a.label ?? i}
+                kind="secondary"
+                icon={a.icon}
+                onClick={a.onClick}
+                disabled={disabled || a.disabled}
+                title={a.title}
+              >
+                {a.label}
+              </Button>
+            ))}
             <Button
-              kind={accepted ? 'secondary' : 'primary'}
-              // No ✓ until the action is actually ready: a disabled primary
-              // (nothing selected / gated) shows the label alone — the check
-              // would imply "ready to commit" when it isn't.
-              icon={disabled ? undefined : (accepted ? 'rotate-ccw' : 'check')}
+              // Tentative (walking a gated tab) → quiet white, like the
+              // secondary; only the real chain is red. Accepted → secondary
+              // "Re-accept". Otherwise the terminal red primary.
+              kind={(accepted || primaryTentative) ? 'secondary' : 'primary'}
+              // No ✓ unless this is the real commit: a disabled primary
+              // (nothing selected / gated) OR a tentative walk step shows the
+              // label alone — the check would imply "ready to commit / done"
+              // when it isn't.
+              icon={disabled || primaryTentative ? undefined : (accepted ? 'rotate-ccw' : 'check')}
               onClick={onAccept}
               disabled={disabled}
             >

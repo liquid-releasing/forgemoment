@@ -98,6 +98,11 @@ export function ChapterRibbon({
   // strip]] thinking); the MediaViewer master clock made it useful
   // again for non-video modes.
   currentMs,
+  // Optional user-authored markers — `[{ id, at_ms, name }]`. Painted as
+  // thin amber ticks over the bands (hover shows the name); those outside
+  // the current zoom viewport are skipped. Same jump points that ride
+  // chapters.json into ForgePlayer's seek bar.
+  markers = null,
   // Optional reference lanes under the chapter bands (audio peaks + magma
   // spectrogram), windowed to the same zoom view. Present → the bands shrink
   // to the top sub-lane and audio/spectro stack beneath (Characters tab).
@@ -441,6 +446,26 @@ export function ChapterRibbon({
             <LaneLabel text="Spectro" bright />
           </div>
         )}
+
+        {/* Marker ticks — user-authored jump points. Thin amber verticals
+            over the bands; hover shows the name. Drawn under the baton so a
+            marker at the playhead doesn't hide the baton. */}
+        {Array.isArray(markers) && markers.map((m) => {
+          const ms = m?.at_ms ?? 0;
+          if (!(ms >= viewStart && ms <= viewEnd)) return null;
+          return (
+            <div key={m.id ?? ms} title={m.name || undefined} style={{
+              position: 'absolute',
+              top: 0, height: bandsHeight,
+              left: xFor(ms),
+              width: 2,
+              transform: 'translateX(-1px)',
+              background: 'rgba(255,176,71,0.95)',
+              pointerEvents: 'none',
+              zIndex: 4,
+            }} />
+          );
+        })}
 
         {/* Playhead baton — spans all sub-lanes (bands + audio + spectro).
             Only renders when inside the current viewport. */}

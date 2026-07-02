@@ -161,18 +161,22 @@ function EmptyCard({ height, message, icon = 'circle' }) {
 
 // ─── Panel: chapter strip ─────────────────────────────────────────
 // Top row — chapter ribbon with click-to-focus. Reuses the chapter
-// vocabulary forgemoment already standardised. v1 ships a thin
-// placeholder; the real ChapterRibbon hookup lands when the analyze
-// trigger wires up.
+// vocabulary forgemoment already standardised. Bands stay sized by
+// duration; the strip is tall enough that each name reads DOWN the
+// band (vertical text) so even a narrow chapter shows its full title
+// without truncation. See CHAPTER_STRIP_HEIGHT.
+const CHAPTER_STRIP_HEIGHT = 132;
+
 export function ChapterStripPanel({
   status = 'loading', chapters, focusedIdx, onFocus,
   durationMs, error, onRetry,
 }) {
+  const h = CHAPTER_STRIP_HEIGHT;
   return (
     <PanelShell eyebrow="Script overview">
-      {status === 'error'   ? <ErrorCard height={56} message={error} onRetry={onRetry} /> :
-       status === 'empty'   ? <EmptyCard height={56} message="No chapters yet — analysis pending." icon="bookmark" /> :
-       status === 'loading' ? <Skeleton height={56} label="Detecting chapters…" /> :
+      {status === 'error'   ? <ErrorCard height={h} message={error} onRetry={onRetry} /> :
+       status === 'empty'   ? <EmptyCard height={h} message="No chapters yet — analysis pending." icon="bookmark" /> :
+       status === 'loading' ? <Skeleton height={h} label="Detecting chapters…" /> :
                               <ChapterStripBody chapters={chapters} focusedIdx={focusedIdx}
                                                 onFocus={onFocus} durationMs={durationMs} />}
     </PanelShell>
@@ -181,11 +185,11 @@ export function ChapterStripPanel({
 
 function ChapterStripBody({ chapters, focusedIdx, onFocus, durationMs }) {
   if (!chapters || chapters.length === 0 || !durationMs) {
-    return <EmptyCard height={56} message="No chapters in this project." icon="bookmark" />;
+    return <EmptyCard height={CHAPTER_STRIP_HEIGHT} message="No chapters in this project." icon="bookmark" />;
   }
   return (
     <div style={{
-      display: 'flex', height: 56, gap: 0, minWidth: 0,
+      display: 'flex', height: CHAPTER_STRIP_HEIGHT, gap: 0, minWidth: 0,
       borderRadius: 8, overflow: 'hidden',
       background: 'var(--surface-2)', border: '1px solid var(--border)',
     }}>
@@ -194,6 +198,7 @@ function ChapterStripBody({ chapters, focusedIdx, onFocus, durationMs }) {
         const flex = Math.max(0.0001, dur / durationMs);
         const focused = i === focusedIdx;
         const color = c.color || 'var(--accent-2)';
+        const cat = formatChapterCategory(c);
         return (
           <button
             key={c.id ?? i}
@@ -203,24 +208,39 @@ function ChapterStripBody({ chapters, focusedIdx, onFocus, durationMs }) {
               flex, minWidth: 0,
               background: focused ? color : `color-mix(in srgb, ${color} 60%, transparent)`,
               border: 'none',
-              cursor: 'pointer', textAlign: 'left',
-              padding: '8px 12px', color: '#fff',
+              cursor: 'pointer',
+              padding: '8px 0 10px', color: '#fff',
               fontFamily: 'inherit',
               outline: focused ? '1px solid rgba(255,255,255,0.4)' : 'none',
               outlineOffset: -1,
-              display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2,
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+              overflow: 'hidden',
             }}
           >
+            {/* Index stays horizontal at the top — "01" fits any band width. */}
             <div style={{ fontSize: 9.5, fontWeight: 700, opacity: 0.9, letterSpacing: '0.05em',
-                          textTransform: 'uppercase', textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}>
-              {String(i + 1).padStart(2, '0')}{(() => {
-                const cat = formatChapterCategory(c);
-                return cat ? ` · ${cat}` : '';
-              })()}
+                          textShadow: '0 1px 2px rgba(0,0,0,0.45)', flexShrink: 0 }}>
+              {String(i + 1).padStart(2, '0')}
             </div>
-            <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                          textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}>
+            {/* Name reads DOWN the band. writing-mode: vertical-rl flows the
+                text top→bottom with glyphs rotated; nowrap + ellipsis keeps
+                it to a single vertical run (graceful clip only if a title is
+                taller than the strip — the hover title still has it in full). */}
+            <div style={{
+              writingMode: 'vertical-rl',
+              textOrientation: 'mixed',
+              flex: 1, minHeight: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              fontSize: 12, fontWeight: 700, lineHeight: 1.15,
+              textShadow: '0 1px 2px rgba(0,0,0,0.45)',
+            }}>
+              {cat && (
+                <span style={{ fontWeight: 700, fontSize: 9.5, letterSpacing: '0.05em',
+                               textTransform: 'uppercase', opacity: 0.85, marginBottom: 6 }}>
+                  {cat} ·&nbsp;
+                </span>
+              )}
               {c.name || `Chapter ${i + 1}`}
             </div>
           </button>

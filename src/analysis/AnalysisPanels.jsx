@@ -165,7 +165,7 @@ function EmptyCard({ height, message, icon = 'circle' }) {
 // duration; the strip is tall enough that each name reads DOWN the
 // band (vertical text) so even a narrow chapter shows its full title
 // without truncation. See CHAPTER_STRIP_HEIGHT.
-const CHAPTER_STRIP_HEIGHT = 132;
+const CHAPTER_STRIP_HEIGHT = 156;
 
 export function ChapterStripPanel({
   status = 'loading', chapters, focusedIdx, onFocus,
@@ -173,7 +173,7 @@ export function ChapterStripPanel({
 }) {
   const h = CHAPTER_STRIP_HEIGHT;
   return (
-    <PanelShell eyebrow="Script overview">
+    <PanelShell eyebrow="Chapter overview">
       {status === 'error'   ? <ErrorCard height={h} message={error} onRetry={onRetry} /> :
        status === 'empty'   ? <EmptyCard height={h} message="No chapters yet — analysis pending." icon="bookmark" /> :
        status === 'loading' ? <Skeleton height={h} label="Detecting chapters…" /> :
@@ -222,26 +222,23 @@ function ChapterStripBody({ chapters, focusedIdx, onFocus, durationMs }) {
                           textShadow: '0 1px 2px rgba(0,0,0,0.45)', flexShrink: 0 }}>
               {String(i + 1).padStart(2, '0')}
             </div>
-            {/* Name reads DOWN the band. writing-mode: vertical-rl flows the
-                text top→bottom with glyphs rotated; nowrap + ellipsis keeps
-                it to a single vertical run (graceful clip only if a title is
-                taller than the strip — the hover title still has it in full). */}
+            {/* Category label reads UP the band (bottom→top): vertical-rl +
+                rotate(180deg). The chapter NAME is dropped — the index above
+                already identifies the chapter, and the content category
+                (Driving / Varied / …) is the useful signal. nowrap + ellipsis
+                clips only an unusually long category; hover still has the name. */}
             <div style={{
               writingMode: 'vertical-rl',
               textOrientation: 'mixed',
+              transform: 'rotate(180deg)',
               flex: 1, minHeight: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              fontSize: 12, fontWeight: 700, lineHeight: 1.15,
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+              textTransform: 'uppercase',
               textShadow: '0 1px 2px rgba(0,0,0,0.45)',
             }}>
-              {cat && (
-                <span style={{ fontWeight: 700, fontSize: 9.5, letterSpacing: '0.05em',
-                               textTransform: 'uppercase', opacity: 0.85, marginBottom: 6 }}>
-                  {cat} ·&nbsp;
-                </span>
-              )}
-              {c.name || `Chapter ${i + 1}`}
+              {cat || c.name || `Chapter ${i + 1}`}
             </div>
           </button>
         );

@@ -404,11 +404,19 @@ async function detectPills({
     isForged = await fs.exists(feelPath);
   }
 
+  // forge pill — an EXPORTED `<stem>.forge` bundle sits alongside the
+  // project (the portable package ForgePlayer plays). Distinct from BOTH
+  // the `.<stem>.forge/` working dir (never a pill) and the `forged` flag
+  // (= .feel.yml authored). Canonical name; a re-exported `(1)` variant
+  // still leaves the base bundle in place, so this catches "exported once".
+  const hasForgeBundle = await fs.exists(fs.join(dirPath, `${stem}.forge`));
+
   return {
     video: hasVideo,
     audio: hasAudio,
     funscript: hasFunscript,
     forged: isForged,
+    forge: hasForgeBundle,
   };
 }
 

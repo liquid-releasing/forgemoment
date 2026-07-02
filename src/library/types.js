@@ -76,6 +76,7 @@ export const SIDECAR_NAMES = {
  * @property {boolean} audio       audio source present (companion file OR analysis sidecar)
  * @property {boolean} funscript   <stem>.funscript exists alongside the media
  * @property {boolean} forged      <stem>.feel.yml exists in the forge dir
+ * @property {boolean} forge       an exported <stem>.forge bundle sits alongside the project
  */
 
 /**

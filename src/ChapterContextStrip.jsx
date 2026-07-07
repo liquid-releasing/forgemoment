@@ -45,7 +45,7 @@ export function ChapterContextStrip({
   chapter,                  // { at_ms, end_ms }
   actions,                  // [{ at, pos }] — full project; filtered to chapter window internally
   bands,                    // see schema below
-  onSelectBand,             // (bandId) => void
+  onSelectBand,             // (bandId, clickedMs, mods:{ctrl,meta,shift}) => void
   expanded = true,
   onToggleExpanded,         // omit to suppress the collapse button (always-expanded mode)
   header,                   // JSX — left side of the header row
@@ -534,7 +534,12 @@ function StripBody({ chapter, actions, bands, onSelectBand, currentMs, onSeek, w
                 e.stopPropagation();
                 const plotRect = e.currentTarget.parentElement.getBoundingClientRect();
                 const clickedMs = msFromX(e.clientX - plotRect.left);
-                onSelectBand?.(band.id, clickedMs);
+                // 3rd arg = keyboard modifiers, so consumers can implement
+                // multi-select (ctrl/cmd toggle, shift range) on the bands.
+                // Existing consumers ignore it — backward-compatible.
+                onSelectBand?.(band.id, clickedMs, {
+                  ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey,
+                });
               }}
               title={band.title || ''}
               style={{

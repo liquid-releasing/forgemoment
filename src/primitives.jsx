@@ -88,7 +88,10 @@ const ffBtnBase = {
   display: 'inline-flex', alignItems: 'center', gap: 8,
   padding: '8px 14px', borderRadius: 8,
   fontSize: 13, fontWeight: 600, cursor: 'pointer',
-  border: '1px solid transparent',
+  // Longhand so kind/hover overrides of `borderColor` don't collide with a
+  // `border` shorthand (React warns when a rerender removes borderColor while
+  // the shorthand is set). Same pattern as the Card base below.
+  borderWidth: 1, borderStyle: 'solid', borderColor: 'transparent',
   transition: 'transform 150ms var(--ease-standard), box-shadow 150ms var(--ease-standard), background 150ms, border-color 150ms, color 150ms',
   background: 'transparent', color: 'var(--text)',
   whiteSpace: 'nowrap', userSelect: 'none',

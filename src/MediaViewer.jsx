@@ -536,6 +536,10 @@ export function MediaViewer({
     // never let `timeupdate` drive React renders unthrottled.
     const THROTTLE_MS = 250;
     let lastEmit = 0;
+    // A new source starts a new timeline. Carrying the previous clip's last
+    // emitted time into the echo gate would make the first seek on the new
+    // clip look like an external one and fire a redundant seek.
+    lastEmittedMsRef.current = 0;
     const handler = () => {
       const now = performance.now();
       if (now - lastEmit < THROTTLE_MS) return;
@@ -550,7 +554,15 @@ export function MediaViewer({
     };
     v.addEventListener('timeupdate', handler);
     return () => v.removeEventListener('timeupdate', handler);
-  }, [onTimeChange, videoSrcOffsetMs]);
+    // `videoSrc` MUST be here. The <video> below carries key={videoSrc}, so
+    // changing the source DESTROYS the element and mounts a new one. Without
+    // videoSrc in these deps this effect never re-runs, and the listener stays
+    // bound to the dead element — the new one emits nothing. Every other
+    // videoRef-bound effect already lists it; this one didn't, so the FIRST
+    // clip worked and every clip after it had a frozen playhead: the baton
+    // stuck at 0, frame-step jumping to the start (it steps from currentMs),
+    // and "set in / set out" recording 0 instead of where you parked.
+  }, [onTimeChange, videoSrcOffsetMs, videoSrc]);
 
   // Buffer-pause + deferred-play promoter. Two paths into the same
   // resume logic:

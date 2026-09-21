@@ -2439,7 +2439,7 @@ function PitchAudioBody({ spectrogram }) {
                   subtitle={`bin · 0–${nMels - 1}`} />
         <StatTile label="Drift" value={driftLabel} />
         <StatTile label="Frames" value={`${frames}`}
-                  subtitle={`hop ${hopMs}ms`} />
+                  subtitle={`hop ${hopMs.toFixed(1)}ms`} />
       </div>
 
       <div>

@@ -1133,9 +1133,23 @@ export function EnergyHeatRibbon({
 // every cell value across its time range and all mel bins. Single pass
 // over cells, O(nFrames * nMels). The sum-then-divide approach trades
 // peak intensity (which would highlight transients) for sustained
+// Exact frame spacing in ms for a spectrogram, as a float.
+//
+// `hopMs` is rounded to a whole millisecond and is for display only: 512
+// samples at 22050 Hz is 23.21995ms, and mapping frames to time with 23
+// compressed the timeline by 0.948% -- 34 seconds adrift by the end of an
+// hour, which is exactly where the eye is least able to notice. videoflow
+// 1.2 ships the exact spacing as integer microseconds; fall back to the
+// rounded value for sidecars written before that.
+function exactHopMs(spectrogram) {
+  const us = spectrogram?.hopUs;
+  return us ? us / 1000 : spectrogram?.hopMs;
+}
+
 // energy — what "this whole chapter is energetic" actually means.
 function perChapterEnergyFromSpectrogram(chapters, spectrogram, durationMs) {
-  const { cells, nMels, hopMs, nFrames } = spectrogram;
+  const { cells, nMels, nFrames } = spectrogram;
+  const hopMs = exactHopMs(spectrogram);
   const frames = nFrames ?? Math.floor(cells.length / nMels);
   const out = new Array(chapters.length).fill(0);
 
@@ -2395,7 +2409,8 @@ function PitchFunscriptBody({ actions }) {
 }
 
 function PitchAudioBody({ spectrogram }) {
-  const { cells, nMels, nFrames, hopMs } = spectrogram;
+  const { cells, nMels, nFrames } = spectrogram;
+  const hopMs = exactHopMs(spectrogram);
   const frames = nFrames ?? Math.floor(cells.length / nMels);
 
   // Mel-bin distribution: sum intensity per bin across all frames.

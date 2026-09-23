@@ -242,7 +242,48 @@ describe('scanRoot — pills', () => {
     expect(result.projects[0].pills.forged).toBe(true);
   });
 
+  it('forge pill = true when an exported bundle sits alongside the media', async () => {
+    // The pill the Library shows for "this has been exported at least once".
+    // It shipped without a positive test, which is how the exhaustive
+    // assertion below sat red on main instead of being updated.
+    const fs = new InMemoryFs({
+      '/lib/Euphoria2.mp4': '',
+      '/lib/Euphoria2.forge': 'PK',   // the bundle is a zip
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects[0].pills.forge).toBe(true);
+  });
+
+  it('the bundle does not register as a project of its own', async () => {
+    const fs = new InMemoryFs({
+      '/lib/Euphoria2.mp4': '',
+      '/lib/Euphoria2.forge': 'PK',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects.map((x) => x.stem)).toEqual(['Euphoria2']);
+  });
+
+  it('the WORKING dir never sets the forge pill -- only forged', async () => {
+    // `forge` and `forged` are one letter apart and mean different things:
+    //   forge   an exported `<stem>.forge` bundle exists
+    //   forged  `.feel.yml` was authored inside `.<stem>.forge/`
+    // and the working dir is `.<stem>.forge/`, which is neither a bundle nor
+    // a pill. Authoring a project must not make it look exported.
+    const fs = new InMemoryFs({
+      '/lib/Euphoria2.mp4': '',
+      '/lib/.Euphoria2.forge/feel.yml': 'chapters: []',
+    });
+    const result = await scanRoot(ROOT, fs);
+    expect(result.projects[0].pills.forged).toBe(true);
+    expect(result.projects[0].pills.forge).toBe(false);
+  });
+
   it('all pills false when only the media file exists', async () => {
+    // Deliberately EXHAUSTIVE: this is the only assertion pinning the full
+    // pill set, so a new pill is meant to fail here and be added on purpose.
+    // It did its job when `forge` landed and was then left red on main for
+    // three months -- if this fails for you, add the pill, do not loosen the
+    // match.
     const fs = new InMemoryFs({ '/lib/Euphoria2.mp4': '' });
     const result = await scanRoot(ROOT, fs);
     const p = result.projects[0];
@@ -251,6 +292,7 @@ describe('scanRoot — pills', () => {
       audio: false,
       funscript: false,
       forged: false,
+      forge: false,
     });
   });
 });

@@ -17,6 +17,7 @@ export {
   fmtTime,
   fmtTimeShort,
   fmtDurationMs,
+  UNKNOWN_TIME,
 } from './primitives.jsx';
 
 export { HoldSeekButton } from './HoldSeekButton.jsx';

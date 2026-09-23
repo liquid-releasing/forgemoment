@@ -310,12 +310,26 @@ export function fmtTime(ms) {
   return `${String(m).padStart(2, '0')}:${sec.toFixed(2).padStart(5, '0')}`;
 }
 
+// What a time formatter renders when it has no time to render. A length we
+// do not know yet is a normal state -- an app opening a project shows a
+// placeholder before the probe returns -- and it must read as "not yet",
+// never as a number.
+//
+// `Math.max(0, x)` does NOT sanitise: Math.max returns NaN if any argument is
+// NaN, and `??` only catches null/undefined, so an undefined durationMs
+// reached the DOM as the literal string "NaN:NaN" in FunscriptForge's header
+// for the whole of every project load (dogfood 2026-09-23). Guard on
+// Number.isFinite, which rejects NaN, Infinity, undefined and non-numbers
+// alike.
+export const UNKNOWN_TIME = '\u2014';
+
 // fmtDurationMs is fmtTime's sibling for *lengths* (not timestamps).
 // Sub-minute spans render with one decimal second ("18.0s") so users
 // can read the slim difference between e.g. 4.3s and 6.2s phrases;
 // once you're over a minute the decimal drops and it falls back to m:ss.
 export function fmtDurationMs(ms) {
-  const total = Math.max(0, ms ?? 0);
+  if (!Number.isFinite(ms)) return UNKNOWN_TIME;
+  const total = Math.max(0, ms);
   if (total < 60_000) {
     return `${(total / 1000).toFixed(1)}s`;
   }
@@ -326,6 +340,7 @@ export function fmtDurationMs(ms) {
 }
 
 export function fmtTimeShort(ms) {
+  if (!Number.isFinite(ms)) return UNKNOWN_TIME;
   const s = Math.max(0, ms / 1000);
   const m = Math.floor(s / 60);
   const sec = Math.floor(s - m * 60);

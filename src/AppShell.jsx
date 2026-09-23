@@ -64,8 +64,11 @@ export function TopBar({ logo, file, badge, scope, leftActions, rightActions }) 
           <span style={{ fontSize: 13, fontWeight: 600 }}>{file.title}</span>
           <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
             {fmtTimeShort(file.durationMs)}
-            {file.phraseCount != null && ` · ${file.phraseCount} phrases`}
-            {file.actionCount != null && ` · ${file.actionCount} actions`}
+            {/* Number.isFinite, not `!= null`: NaN passes a null check and
+                renders as "· NaN phrases". A count we do not have yet should
+                show nothing at all rather than a non-number. */}
+            {Number.isFinite(file.phraseCount) && ` · ${file.phraseCount} phrases`}
+            {Number.isFinite(file.actionCount) && ` · ${file.actionCount} actions`}
             {file.imported && ` · imported ${file.imported}`}
           </span>
         </div>

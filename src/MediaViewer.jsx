@@ -261,8 +261,10 @@ export function MediaViewer({
   // letterboxes against the surface background.
   thumbnailAspect = null,
   // Transport controls — declared list rendered in order. Each entry is one
-  // of: 'prev' | 'frame-back' | 'back5' | 'play' | 'forward5' |
-  // 'frame-forward' | 'next'. The play button is always rendered with the
+  // of: 'prev' | 'start' | 'frame-back' | 'back5' | 'play' | 'forward5' |
+  // 'frame-forward' | 'end' | 'next'. 'start'/'end' jump to the ends of
+  // the MEDIA; 'chapter-start'/'chapter-end' jump within the current
+  // chapter scope. The play button is always rendered with the
   // primary (circular accent) treatment. Consumers pick whichever set fits
   // the editing scope:
   //   Chapters tab:   ['prev','back5','play','forward5','next']
@@ -796,6 +798,19 @@ export function MediaViewer({
   // chapter scope is supplied.
   const toChapterStart = () => onSeek?.(chapter ? chapter.start : 0);
   const toChapterEnd = () => onSeek?.(chapter ? chapter.end : (totalMs ?? 0));
+  // Whole-MEDIA edge jumps, which is not the same thing as the two above:
+  // these ignore any chapter scope and go to the ends of the clip itself.
+  // Added for trimming, where the question is "where do the end credits
+  // start" and the answer is at the far end of the source, not of a
+  // chapter. Kept separate from chapter-start/chapter-end so their
+  // tooltips can say what they actually do.
+  const toStart = () => onSeek?.(0);
+  // One millisecond inside the end, not exactly on it: a <video> seeked
+  // to precisely its duration is past the last decodable frame and can
+  // come back blank, which is no use to someone looking for where to
+  // cut. A millisecond is indistinguishable from the end and always
+  // lands on a real frame.
+  const toEnd = () => onSeek?.(Math.max(0, (totalMs ?? 0) - 1));
 
   // Absorb wheel events so they don't fall through to the surrounding
   // page scroll. User flagged 2026-05-20 that wheeling over the viewer
@@ -1104,6 +1119,10 @@ export function MediaViewer({
               );
             case 'next':
               return <TransportButton key={i} title={nextTitle} onClick={next}>⏭</TransportButton>;
+            case 'start':
+              return <TransportButton key={i} title="Go to start" onClick={toStart}>⏮</TransportButton>;
+            case 'end':
+              return <TransportButton key={i} title="Go to end" onClick={toEnd}>⏭</TransportButton>;
             case 'chapter-start':
               return <TransportButton key={i} title="Chapter start" onClick={toChapterStart}>⏮</TransportButton>;
             case 'chapter-end':

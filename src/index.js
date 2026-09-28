@@ -132,3 +132,23 @@ export {
   KpiStrip,
   CategoryPanel,
 } from './analysis/AnalysisPanels.jsx';
+
+// Viewer — the read-only review surface for a generated device output:
+// every channel of one device on a shared time axis, whole-device and
+// per-chapter stats, and a reference monitor on the same baton. Carved out
+// of FunscriptForge so ForgeAssembler and ForgePlayer share one copy.
+// Platform-free: the host loads the data and converts paths to URLs.
+export {
+  ViewerPanel,
+  StatRow,
+  ChannelStack,
+  computeIntensity,
+  resolveMonitorFunscript,
+  quantile,
+  mean,
+  computeStats,
+  livelinessScore,
+  posAt,
+  livelinessInWindow,
+  analyzeChannels,
+} from './viewer/index.js';

@@ -22,6 +22,7 @@
 // is there for a host that wants to observe the playhead, not drive it.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FolderOpen, SquareArrowOutUpRight } from 'lucide-react';
 import { MediaViewer } from '../MediaViewer.jsx';
 import { ChannelStack } from './ChannelStack.jsx';
 import { analyzeChannels, livelinessInWindow } from './stats.js';
@@ -54,7 +55,11 @@ export function ViewerPanel({
   // ── Provenance footer ───────────────────────────────────────────
   // Which artifact is being reviewed. Worth showing: with sibling fallback you
   // can open the 4K and be reading the 1080p output.
-  source = null,           // { label, name, path }
+  // `onOpen` / `onReveal` are optional: with them the name becomes a button
+  // that hands the artifact to whatever the OS has registered for it, and a
+  // box-and-arrow opens its folder. Callbacks, not paths, because forgemoment
+  // does no IO -- the host owns the shell.
+  source = null,           // { label, name, path, onOpen?, onReveal? }
 
   // ── Chrome ──────────────────────────────────────────────────────
   headerExtra = null,      // host-specific controls beside the device pills
@@ -312,17 +317,41 @@ export function ViewerPanel({
                          color: 'var(--text-muted, #9ba3c4)' }}>
             {source.label || 'Output'}
           </span>
-          <span style={{ flexShrink: 0, color: 'var(--text, #fafafa)' }}>
-            {source.name || '—'}
-          </span>
+          {source.onOpen ? (
+            <button type="button" onClick={source.onOpen}
+                    title={`Open ${source.name || 'this file'}`}
+                    style={{ ...sourceLinkStyle, color: 'var(--accent, #7aa2f7)' }}>
+              {source.name || '—'}
+            </button>
+          ) : (
+            <span style={{ flexShrink: 0, color: 'var(--text, #fafafa)' }}>
+              {source.name || '—'}
+            </span>
+          )}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', opacity: 0.7 }}>
             {source.path || ''}
           </span>
+          {source.onReveal && (
+            <button type="button" onClick={source.onReveal} title="Show in folder"
+                    style={{ ...sourceLinkStyle, padding: 2, display: 'inline-flex',
+                             color: 'var(--text-muted, #9ba3c4)' }}>
+              <SquareArrowOutUpRight size={12} strokeWidth={2} />
+            </button>
+          )}
         </div>
       )}
     </section>
   );
 }
+
+// A button that has to read as part of a line of mono text: no chrome, no
+// padding, and the SAME font as its neighbours -- a <button> otherwise takes
+// the UA's font and shifts the whole row.
+const sourceLinkStyle = {
+  flexShrink: 0, background: 'none', border: 'none', padding: 0,
+  font: 'inherit', cursor: 'pointer', textDecoration: 'underline',
+  textUnderlineOffset: 2,
+};
 
 export function StatRow({ label, value, big = false }) {
   return (
